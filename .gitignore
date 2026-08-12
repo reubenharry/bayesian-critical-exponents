@@ -1,0 +1,27 @@
+.vscode
+.idea
+.venv
+/venv
+__pycache__/
+*.py[cod]
+*.egg-info
+build
+dist
+.ipynb_checkpoints/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+diff-cover.html
+*.nc
+*.npz
+*.npy
+*.pkl
+.work/
+.claude/settings.local.json
+
+# Local experiment outputs (regenerate via simulate/fit)
+ising/plots/
+ising/posteriors/
+phi4/plots/
+phi4/posteriors/

@@ -1,0 +1,35 @@
+{
+  "name": "medium",
+  "L": [
+    12,
+    16,
+    24,
+    32,
+    40,
+    48
+  ],
+  "T": [
+    3.5,
+    3.8,
+    4.0,
+    4.15,
+    4.25,
+    4.35,
+    4.5,
+    4.8,
+    5.2,
+    5.5
+  ],
+  "n_thermalize": 500,
+  "n_sweeps": 2000,
+  "seed": 0,
+  "description": "Default \u03c6\u2074 production grid: 6 lattice sizes, 10 \u03bb values near \u03bb_c.",
+  "z_values": null,
+  "nu_grid": 1.0,
+  "points": null,
+  "n_points": 60,
+  "observables_path": "/home/reuben/HMCLib/phi4/data/observables_medium.csv",
+  "control_parameter": "lam",
+  "lam_c": 4.25,
+  "tc_exact_alias": 4.25
+}

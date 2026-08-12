@@ -1,0 +1,37 @@
+{
+  "name": "L64_128",
+  "L": [
+    64,
+    128
+  ],
+  "T": [
+    4.05,
+    4.15,
+    4.2,
+    4.22,
+    4.24,
+    4.25,
+    4.27,
+    4.28,
+    4.3,
+    4.32,
+    4.35,
+    4.38,
+    4.4,
+    4.45,
+    4.55,
+    4.8
+  ],
+  "n_thermalize": 800,
+  "n_sweeps": 12000,
+  "seed": 0,
+  "description": "Large-L \u03c6\u2074 grid: L=64,128 with dense \u03bb near/above \u03bb_c=4.25; simulate with min ESS(m) >= 250 (adaptive HMC).",
+  "z_values": null,
+  "nu_grid": 1.0,
+  "points": null,
+  "n_points": 32,
+  "observables_path": "/home/reuben/HMCLib/phi4/data/observables_L64_128.csv",
+  "control_parameter": "lam",
+  "lam_c": 4.25,
+  "tc_exact_alias": 4.25
+}

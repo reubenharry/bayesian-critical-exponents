@@ -1,0 +1,25 @@
+{
+  "name": "critical_large_z",
+  "L": [
+    48,
+    64,
+    96
+  ],
+  "T": [],
+  "n_thermalize": 3000,
+  "n_sweeps": 30000,
+  "seed": 0,
+  "description": "Large-L scaling-regime grid: T(L) chosen so |z|<=0.3 is constant across L, 7 z-points, very long Wolff chains for low MC noise.",
+  "z_values": [
+    -0.3,
+    -0.15,
+    -0.05,
+    0.0,
+    0.05,
+    0.15,
+    0.3
+  ],
+  "nu_grid": 1.0,
+  "n_points": 21,
+  "observables_path": "/home/reuben/HMCLib/ising/data/observables_critical_large_z.csv"
+}

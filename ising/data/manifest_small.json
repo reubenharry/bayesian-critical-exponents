@@ -1,0 +1,21 @@
+{
+  "name": "small",
+  "L": [
+    16,
+    32
+  ],
+  "T": [
+    2.0,
+    2.15,
+    2.2,
+    2.269185314213022,
+    2.3,
+    2.32
+  ],
+  "n_thermalize": 500,
+  "n_sweeps": 2000,
+  "seed": 0,
+  "description": "Smoke-test grid: 2 lattice sizes, 6 temperatures (bulk-ordered, subcritical, T_c, above T_c).",
+  "n_points": 12,
+  "observables_path": "/home/reuben/HMCLib/ising/data/observables_small.csv"
+}

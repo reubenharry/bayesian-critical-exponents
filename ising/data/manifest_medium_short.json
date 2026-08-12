@@ -1,0 +1,29 @@
+{
+  "name": "medium_short",
+  "L": [
+    12,
+    16,
+    24,
+    32,
+    40,
+    48
+  ],
+  "T": [
+    2.0,
+    2.05,
+    2.1,
+    2.15,
+    2.2,
+    2.24,
+    2.269185314213022,
+    2.28,
+    2.3,
+    2.32
+  ],
+  "n_thermalize": 500,
+  "n_sweeps": 800,
+  "seed": 0,
+  "description": "Same (L, T) grid as medium with n_sweeps=800 (~1/5 of medium) for noisier MC errors and wider exponent posteriors.",
+  "n_points": 60,
+  "observables_path": "/home/reuben/HMCLib/ising/data/observables_medium_short.csv"
+}

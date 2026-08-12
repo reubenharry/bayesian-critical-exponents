@@ -1,0 +1,7 @@
+# Raw HMC magnetization chains (simulate --store-samples); regenerate locally.
+samples_*.npz
+
+# Multi-chain R-hat runs (run_multichain_rhat).
+checkpoints/
+samples_*_nchains.zarr/
+*.zarr/

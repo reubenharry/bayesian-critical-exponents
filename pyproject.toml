@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "probabilisticnumerics"
+version = "0.1.0"
+description = "Bayesian finite-size scaling and active learning for Ising and φ⁴ models."
+readme = {file = "README.md", content-type = "text/markdown"}
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "matplotlib",
+    "pymc>=5",
+    "arviz>=0.18",
+    "jax>=0.4",
+    "jaxlib>=0.4",
+    "blackjax>=1.5",
+    "zarr>=2.18",
+]
+
+[project.optional-dependencies]
+notebook = [
+    "ipython>=8.38.0",
+    "ipywidgets>=8.0",
+    "ipympl>=0.9",
+    "plotly>=5.0",
+    "nbformat>=5.0",
+    "anywidget>=0.9",
+    "fastprogress>=1.0",
+    "seaborn>=0.13.2",
+]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.8",
+    "pre-commit>=3.0",
+]
+test = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ising*", "phi4*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+norecursedirs = ["*.egg-info", ".git", "build", "dist"]
+addopts = "-ra --strict-markers"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "requires_analysis: tests that need local data fixtures",
+]
+
+[dependency-groups]
+dev = ["pytest>=7.0", "ruff>=0.8", "pre-commit>=3.0"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+src = ["ising", "phi4", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "W",
+  "F",
+  "I",
+  "B",
+  "C4",
+  "UP",
+]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ising", "phi4"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F841", "F405", "B023", "F403", "F811"]
+
+[tool.ruff.format]
+quote-style = "double"

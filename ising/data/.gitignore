@@ -1,0 +1,2 @@
+# Raw Wolff chains (simulate --store-samples); regenerate locally.
+samples_*.npz

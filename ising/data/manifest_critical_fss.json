@@ -1,0 +1,31 @@
+{
+  "name": "critical_fss",
+  "L": [
+    64,
+    96,
+    128,
+    192,
+    256
+  ],
+  "T": [],
+  "n_thermalize": 4000,
+  "n_sweeps": 40000,
+  "seed": 0,
+  "description": "FSS-focused grid: five lattice sizes (64\u2013256, ratio 4), eleven z-points denser near z=0, long Wolff chains for classical Binder/log-log analysis.",
+  "z_values": [
+    -0.3,
+    -0.2,
+    -0.12,
+    -0.06,
+    -0.03,
+    0.0,
+    0.03,
+    0.06,
+    0.12,
+    0.2,
+    0.3
+  ],
+  "nu_grid": 1.0,
+  "n_points": 55,
+  "observables_path": "/home/reuben/HMCLib/ising/data/observables_critical_fss.csv"
+}

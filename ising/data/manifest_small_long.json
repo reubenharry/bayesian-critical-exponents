@@ -1,0 +1,23 @@
+{
+  "name": "small_long",
+  "L": [
+    16,
+    32
+  ],
+  "T": [
+    2.0,
+    2.15,
+    2.2,
+    2.269185314213022,
+    2.3,
+    2.32,
+    2.4,
+    2.5
+  ],
+  "n_thermalize": 1000,
+  "n_sweeps": 8000,
+  "seed": 0,
+  "description": "Sparse grid like small plus T=2.40, 2.50 (16 points) with long chains for lower Monte Carlo noise while keeping inference cost low.",
+  "n_points": 16,
+  "observables_path": "/home/reuben/HMCLib/ising/data/observables_small_long.csv"
+}

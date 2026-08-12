@@ -1,0 +1,24 @@
+{
+  "name": "critical",
+  "L": [
+    16,
+    32,
+    48,
+    64
+  ],
+  "T": [
+    2.2351,
+    2.2465,
+    2.2578,
+    2.2692,
+    2.2805,
+    2.2919,
+    2.3032
+  ],
+  "n_thermalize": 1000,
+  "n_sweeps": 12000,
+  "seed": 0,
+  "description": "Near-T_c grid for joint m + Binder FSS: 4 lattice sizes, 7 symmetric temperatures (|t|<=0.015), long chains for U_4 moments.",
+  "n_points": 28,
+  "observables_path": "/home/reuben/HMCLib/ising/data/observables_critical.csv"
+}
