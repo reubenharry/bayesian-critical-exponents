@@ -1,6 +1,9 @@
-Extracting critical exponents from simulations of statistical field theories is traditionally done with a complicated, but ad~hoc,
-frequentist procedure.
-The goal of this project, in the spirit of [Harada 2011](https://arxiv.org/abs/1102.4149), is to systematize that procedure using Bayesian probability.
+Extracting critical exponents from simulations of statistical field theories is traditionally done with a complicated, but ad-hoc procedure.
+The goal of this project, in the spirit of [Harada 2011](https://arxiv.org/abs/1102.4149), is to systematize that procedure using Bayesian probability. The benefits we're hoping to get are:
+
+- better uncertainty quantification on the critical parameters
+- relatedly: optimal use of simulation budget
+- near-optimal choice of simulations, in a cost aware fashion
 
 Try out `ising/discrepancy_m_explorer.ipynb` to see visualizations of the likelihood, and `ising/plots/budget_al_harada_square_costaware_lcycle/evolution_stepper.ipynb` to see the evolution of the posterior at more simulations are run.
 
