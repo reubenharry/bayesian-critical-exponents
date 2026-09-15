@@ -2,6 +2,7 @@ Extracting critical exponents from simulations of statistical field theories is 
 frequentist procedure.
 The goal of this project, in the spirit of [Harada 2011](https://arxiv.org/abs/1102.4149), is to systematize that procedure using Bayesian probability.
 
+Try out `ising/discrepancy_m_explorer.ipynb` to see visualizations of the likelihood, and `ising/plots/budget_al_harada_square_costaware_lcycle/evolution_stepper.ipynb` to see the evolution of the posterior at more simulations are run.
 
 # The Bayesian setup
 
