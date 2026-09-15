@@ -44,7 +44,7 @@ We then infer $p(\theta \bigm| D) = p(T_c,\nu, \beta, f_m, \ldots \bigm| D) \pro
 
 Usefully, we can integrate out $p(f_c)$ to obtain a marginal likelihood $p(D \bigm| T_c, \nu, \beta) = \int p(D \bigm| T_c, \nu, \beta, f_m)df_m \ldots df_{m^4}$. This allows us to sample from the posterior $p(T_c, \beta, \nu \bigm| D) \propto p(T_c) p(\beta) p(\nu) p(D \bigm| T_c, \beta, \nu)$ using e.g. MCMC.
 
-Writing this out, $\log p(D\mid\psi) = \sum_{c\in\{m,m^2,m^4\}} [ -\tfrac12\, {\Phi^{(c)}}^\top \bigl(K^{(c)}\bigr)^{-1} \Phi^{(c)} -\tfrac12\log\det K^{(c)} -\tfrac{n}{2}\log(2\pi) ]$, where $K^{(c)}_{ij} = k_{\ell_f,\eta_f}(z_i,z_j) + \sigma_i^2 \delta_{ij}$.
+Writing this out, $\log p(D\mid\psi) = \sum_{c\in\{m,m^2,m^4\}} \Biggl[ -\tfrac12\, {\Phi^{(c)}}^\top \bigl(K^{(c)}\bigr)^{-1} \Phi^{(c)} -\tfrac12\log\det K^{(c)} -\tfrac{n}{2}\log(2\pi) \Biggr]$, where $K^{(c)}_{ij} = k_{l_f,\eta_f}(z_i,z_j) + \sigma_i^2 \delta_{ij}$.
 
 
 # A less naive model
