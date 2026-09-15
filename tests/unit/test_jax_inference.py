@@ -83,6 +83,62 @@ def test_jax_log_posterior_gp_hyperparams_finite() -> None:
     assert np.all(np.isfinite(np.asarray(grad)))
 
 
+def test_jax_log_posterior_poly2_universal_kernel_finite() -> None:
+    obs = _synthetic_observables(n=8)
+    config = FssProfileConfig(
+        use_m=False,
+        use_m2=False,
+        use_m4=False,
+        use_binder=True,
+        use_chi=False,
+        correction_binder=False,
+        infer_Tc=True,
+        infer_nu=True,
+        infer_beta=False,
+        universal_kernel="poly2",
+        gp_kernel="gaussian",
+    )
+    posterior = compile_fss_log_posterior(
+        obs,
+        config,
+        infer_Tc=True,
+        infer_nu=True,
+        infer_beta=False,
+    )
+    assert posterior.layout.universal_kernel == "poly2"
+    u0 = posterior.initial_position(T_c=TC_EXACT, nu=NU_EXACT, beta=BETA_EXACT)
+    logp = float(posterior.logdensity(u0))
+    assert np.isfinite(logp)
+
+
+def test_jax_poly2_gp_hyperparams_omit_gp_ell() -> None:
+    obs = _synthetic_observables(n=8)
+    config = FssProfileConfig(
+        use_m=False,
+        use_m2=False,
+        use_m4=False,
+        use_binder=True,
+        use_chi=False,
+        correction_binder=False,
+        infer_Tc=True,
+        infer_nu=True,
+        infer_beta=False,
+        universal_kernel="poly2",
+    )
+    posterior = compile_fss_log_posterior(
+        obs,
+        config,
+        infer_Tc=True,
+        infer_nu=True,
+        infer_beta=False,
+        infer_gp_hyperparams=True,
+    )
+    slot_names = {slot.name for slot in posterior.layout.slots}
+    assert "gp_eta" in slot_names
+    assert "gp_ell" not in slot_names
+    assert posterior.layout.infer_gp_ell is False
+
+
 def test_jax_gp_hyperparams_match_fixed_likelihood_at_reference() -> None:
     obs = _synthetic_observables(n=8)
     config = FssProfileConfig(
@@ -130,6 +186,7 @@ def test_jax_gp_hyperparams_match_fixed_likelihood_at_reference() -> None:
             layout.fixed_disc_p,
             layout.fixed_disc_q,
             layout.fixed_disc_sigma_model,
+            1.0,
             True,
         )
     )
@@ -207,3 +264,38 @@ def test_laps_sampler_smoke() -> None:
     assert idata.posterior.attrs["sampler_backend"] == "laps"
     assert "nu" in idata.posterior
     assert idata.posterior["nu"].shape == (4, 1)
+
+
+def test_additive_gp_fss_disc_q_uses_omega_prior() -> None:
+    obs = _synthetic_observables(n=8)
+    config = FssProfileConfig(
+        use_m=True,
+        use_m2=False,
+        use_m4=False,
+        use_binder=False,
+        use_chi=False,
+        correction_m=False,
+        correction_m2=False,
+        correction_m4=False,
+        correction_binder=False,
+        correction_chi=False,
+        discrepancy_m=True,
+        discrepancy_form="additive_gp_fss",
+        infer_Tc=True,
+        infer_nu=True,
+        infer_beta=False,
+        use_log_m=False,
+    )
+    posterior = compile_fss_log_posterior(
+        obs,
+        config,
+        infer_Tc=True,
+        infer_nu=True,
+        infer_beta=False,
+        infer_discrepancy=False,
+        infer_disc_q=True,
+    )
+    q_slot = next(slot for slot in posterior.layout.slots if slot.name == "disc_q")
+    assert (q_slot.lower, q_slot.upper) == (1.0, 10.0)
+    assert posterior.layout.infer_disc_q is True
+    assert posterior.layout.infer_disc_t0 is False

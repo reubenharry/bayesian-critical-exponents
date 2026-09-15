@@ -1,0 +1,431 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{bm}
+
+\title{Finite-size scaling with GP scaling functions\\
+and FSS mixture discrepancy ($\kappa$, $\omega$)}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+
+Extracting critical exponents from simulations of statistical field
+theories is traditionally done with a complicated, but ad~hoc,
+frequentist procedure.
+The goal of this project, in the spirit of~\cite{harada}, is to
+systematize that procedure using Bayesian probability.
+
+\section{Finite-size scaling from the renormalization group}
+
+View renormalization as an operator $R_b : K \to K$ (for $b\in\mathbb{R}$)
+on the coupling space of a theory $K$.
+We want the eigenvalues of the linearization $J_b$ of $R_b$ around a
+fixed point of interest.
+If
+\begin{equation}
+  J_b(u_i) = b^{y_i}\, u_i,
+\end{equation}
+then $y_i$ is the RG eigenvalue of the corresponding scaling field $u_i$
+(often written $b^{-x_i}$ for the dual operator scaling dimensions; we
+keep the $y_i$ convention below).
+
+For an observable $O$, define the pushforward
+$R_b^* O = O\circ R_b$.
+This likewise has an eigendecomposition.
+For an eigenoperator $\Phi$ of scaling dimension $x_O$,
+\begin{equation}
+  \langle\Phi\rangle(t,\{u_i\})
+    = b^{-x_O}\,
+      \langle\Phi\rangle\!\bigl(b^{y_t} t,\, \{b^{y_i} u_i\}\bigr).
+\end{equation}
+Taking the finite-size identification $b = L$,
+\begin{equation}
+  \label{eq:fss-eigen}
+  \langle\Phi\rangle(t,\{u_i\})
+    = L^{-x_O}\,
+      \langle\Phi\rangle\!\bigl(t L^{y_t},\, \{u_i L^{y_i}\}\bigr).
+\end{equation}
+A general observable is a linear combination of such eigenoperators, so
+\begin{equation}
+  \label{eq:fss-general}
+  \boxed{
+  \langle O\rangle_L
+    = L^{-x_0}
+      \Biggl[
+        F_0\bigl(\{u_i L^{y_i}\}\bigr)
+        +
+        \sum_{a>0}
+        L^{-(x_a-x_0)}
+        F_a\bigl(\{u_i L^{y_i}\}\bigr)
+      \Biggr]
+  }
+\end{equation}
+where $x_0$ is the leading (most relevant) operator dimension contributing
+to $O$, and the sum collects subleading operators.
+
+\subsection{Ising magnetization moments}
+
+Specialize to the 2D Ising universality class with a single relevant
+thermal perturbation.
+Write
+\begin{equation}
+  t = \frac{T-T_c}{T_c}
+\end{equation}
+for the reduced temperature, so the thermal scaling field is
+$u_t \propto t$ with RG eigenvalue
+\begin{equation}
+  y_t = \frac{1}{\nu}.
+\end{equation}
+The leading irrelevant bulk operator has eigenvalue $y_{\mathrm{irr}} = -\omega$
+(Wegner's correction-to-scaling exponent), and we write $u$ for its
+(nonlinear) scaling field.
+Keeping only these two fields, the arguments of the scaling functions are
+\begin{equation}
+  z := t\, L^{1/\nu},
+  \qquad
+  u\, L^{-\omega}.
+\end{equation}
+
+For the absolute magnetization density $m = \langle |M|\rangle / N$,
+the leading magnetic scaling dimension is $x_0 = \beta/\nu$, so
+\begin{equation}
+  \label{eq:m-fss}
+  m(t,L)
+    = L^{-\beta/\nu}\,
+      \Bigl[
+        F_m\!\bigl(z,\, u L^{-\omega}\bigr)
+        + O\!\bigl(L^{-(x_1-\beta/\nu)}\bigr)
+      \Bigr].
+\end{equation}
+The moments $\langle m^2\rangle$ and $\langle m^4\rangle$ are controlled by
+$2$ and $4$ powers of the magnetic operator, hence
+\begin{align}
+  \label{eq:m2-fss}
+  m^2(t,L)
+    &= L^{-2\beta/\nu}\,
+      \Bigl[
+        F_{m^2}\!\bigl(z,\, u L^{-\omega}\bigr)
+        + \cdots
+      \Bigr],
+  \\
+  \label{eq:m4-fss}
+  m^4(t,L)
+    &= L^{-4\beta/\nu}\,
+      \Bigl[
+        F_{m^4}\!\bigl(z,\, u L^{-\omega}\bigr)
+        + \cdots
+      \Bigr].
+\end{align}
+(Equivalently: collapsing with $L^{k\beta/\nu}$ for the $k$-th moment removes
+the leading $L$-power and leaves a universal function of
+$(z,\, u L^{-\omega})$.)
+
+Expanding the leading scaling function in the irrelevant direction near
+the fixed point,
+\begin{equation}
+  \label{eq:wegner-expand}
+  F_c(z,\, u L^{-\omega})
+    = f_c(z) + (u L^{-\omega})\, g_c(z) + O(L^{-2\omega}),
+\end{equation}
+so the collapsed fields
+\begin{equation}
+  \Phi_m := m\, L^{\beta/\nu},
+  \qquad
+  \Phi_{m^2} := m^2\, L^{2\beta/\nu},
+  \qquad
+  \Phi_{m^4} := m^4\, L^{4\beta/\nu}
+\end{equation}
+satisfy, to leading correction,
+\begin{equation}
+  \label{eq:phi-wegner}
+  \Phi_c(z,L)
+    = f_c(z) + u\, L^{-\omega}\, g_c(z) + \cdots.
+\end{equation}
+Thus the natural finite-size correction to a collapsed observable is
+multiplicative in $L^{-\omega}$: that is why the Wegner factor appears as
+a power of $L$, not of $t$ alone.
+
+\subsection{Why $a = L^{-\omega} + \kappa\,|t|^{\omega\nu}$}
+
+Equation~\eqref{eq:phi-wegner} already motivates an amplitude proportional
+to $L^{-\omega}$ at $t=0$.
+Away from criticality the irrelevant scaling field itself depends on $t$,
+and bulk Wegner corrections produce terms $\sim |t|^{\Delta}$ with
+$\Delta = \omega\nu$.
+A minimal two-term ansatz that (i)~matches the finite-size correction
+$L^{-\omega}$ and (ii)~matches the bulk correction $|t|^{\omega\nu}$, while
+remaining homogeneous under the collapse $(t,L)\mapsto z$, is
+\begin{equation}
+  \label{eq:a-fss}
+  a(t,L)
+    = L^{-\omega} + \kappa\, |t|^{\omega\nu}
+    = L^{-\omega}\bigl(1 + \kappa\, |z|^{\omega\nu}\bigr).
+\end{equation}
+The factored form makes the RG content explicit: the whole correction is
+$O(L^{-\omega})$ times a smooth function of the collapse coordinate $z$,
+and $1+\kappa|z|^{\omega\nu}$ is a simple positive surrogate for that
+$z$-dependence (with relative weight $\kappa$).
+In particular:
+\begin{itemize}
+  \item $L^{-\omega}$ comes from the RG eigenvalue $y_{\mathrm{irr}}=-\omega$ of
+    the leading irrelevant operator in~\eqref{eq:fss-general}
+    and~\eqref{eq:wegner-expand};
+  \item $|t|^{\omega\nu}$ is the bulk conjugate
+    ($|t|^{\Delta}$ with $\Delta=\omega\nu$), equivalently
+    $|z|^{\omega\nu} L^{-\omega}$ after collapse;
+  \item $a\to 0$ whenever $t\to 0$ and $L\to\infty$ together, so the
+    asymptotic scaling window is recovered.
+\end{itemize}
+
+\section{The Bayesian setup}
+
+As in any Bayesian problem, we start from unknowns and knowns.
+Concretely, for the 2D Ising model with one relevant thermal
+perturbation:
+
+\paragraph{Unknowns.}
+The critical parameters $\theta = (T_c,\nu,\beta)$ (and the correction
+exponents / amplitudes $\omega,\kappa$), together with the universal
+scaling functions $f_c$ (and discrepancy functions $g_c$) for each
+observable channel $c\in\{m,m^2,m^4\}$.
+
+\paragraph{Knowns.}
+\begin{itemize}
+  \item Critical exponents are positive; $T_c$ is positive.
+  \item Scaling functions are smooth, with a characteristic length scale
+    in $z$ that we encode through a GP kernel.
+  \item We can estimate observables at any $(T,L)$ by Monte Carlo, up to
+    a statistical uncertainty $\sigma$; reducing $\sigma$ is costly and
+    compute is finite.
+  \item For fixed $\theta$, the collapsed observables $\Phi_c$ become
+    increasingly accurate descriptions of a universal $f_c(z)$ in the
+    limit $t\to 0$, $L\to\infty$ with $z = t L^{1/\nu}$ fixed
+    (Eqs.~\eqref{eq:fss-general}--\eqref{eq:phi-wegner}).
+\end{itemize}
+
+The data are Monte Carlo estimates
+\[
+  D
+  = \bigl\{
+      (L_i,T_i,\, m_i,m^2_i,m^4_i,\,
+       \sigma_{m,i},\sigma_{m^2,i},\sigma_{m^4,i})
+    \bigr\}_{i=1}^{n}.
+\]
+For each observation form the collapsed fields and propagate the MC
+errors,
+\begin{align}
+  \Phi_{m,i}
+    &= m_i\, L_i^{\beta/\nu},
+  &
+  \sigma_{\Phi_m,i}
+    &= \sigma_{m,i}\, L_i^{\beta/\nu},
+  \\
+  \Phi_{m^2,i}
+    &= m^2_i\, L_i^{2\beta/\nu},
+  &
+  \sigma_{\Phi_{m^2},i}
+    &= \sigma_{m^2,i}\, L_i^{2\beta/\nu},
+  \\
+  \Phi_{m^4,i}
+    &= m^4_i\, L_i^{4\beta/\nu},
+  &
+  \sigma_{\Phi_{m^4},i}
+    &= \sigma_{m^4,i}\, L_i^{4\beta/\nu}.
+\end{align}
+Write $\Phi^{(c)} = (\Phi_{c,1},\ldots,\Phi_{c,n})^\top$ for channel
+$c\in\{m,m^2,m^4\}$, and
+\begin{equation}
+  t_i = \frac{T_i - T_c}{T_c},
+  \qquad
+  z_i = t_i\, L_i^{1/\nu}.
+\end{equation}
+
+\section{Latent model: universal GP + FSS mixture discrepancy}
+
+Rather than fitting parametric forms for $f_c$ and $g_c$, place
+independent zero-mean GP priors on $z$,
+\begin{equation}
+  f^{(c)} \sim \mathrm{GP}(0,\, k_{\ell_f,\eta_f}),
+  \qquad
+  g^{(c)} \sim \mathrm{GP}(0,\, k_{\ell_g,\sigma_g}),
+\end{equation}
+with RBF kernel
+\begin{equation}
+  k_{\ell,\eta}(z,z')
+    = \eta^2
+      \exp\!\Bigl(-\frac{(z-z')^2}{2\ell^2}\Bigr).
+\end{equation}
+Using the amplitude~\eqref{eq:a-fss}, define the unit-interval mixture gate
+\begin{equation}
+  \label{eq:pi-gate}
+  \pi(t,L)
+    = \frac{a(t,L)}{1 + a(t,L)}
+    \in [0,1).
+\end{equation}
+The collapsed observation model is the \emph{mixture} coupling
+\begin{equation}
+  \label{eq:phi-model}
+  \Phi^{(c)}_i
+    = \bigl(1-\pi_i\bigr)\, f^{(c)}(z_i)
+      + \pi_i\, g^{(c)}(z_i)
+      + \varepsilon^{(c)}_i,
+  \qquad
+  \varepsilon^{(c)}_i
+    \sim \mathcal{N}\!\bigl(0,\, \sigma_{\Phi_c,i}^2\bigr),
+\end{equation}
+where $\pi_i = \pi(t_i,L_i)$.
+Channels share $(\omega,\kappa,\ell_f,\eta_f,\ell_g,\sigma_g)$ but have
+independent draws of $(f^{(c)},g^{(c)})$.
+There is no extra $L^{k\beta/\nu}$ factor on $a$ in $\Phi$-space: after
+collapsing,~\eqref{eq:a-fss} already multiplies the correction channel.
+
+As $t\to 0$ and $L\to\infty$, $a\to 0$ so $\pi\to 0$
+and~\eqref{eq:phi-model} recovers the plain universal model
+$\Phi = f + \varepsilon$.
+When $a$ is large (small $L$ and/or large $|z|$), $\pi\to 1$ and the point
+is explained by $g$ instead of $f$: out-of-window observations do not train
+the universal scaling function.
+When $\kappa=0$,~\eqref{eq:a-fss} reduces to pure $L^{-\omega}$ gating,
+\begin{equation}
+  \pi = \frac{L^{-\omega}}{1+L^{-\omega}},
+\end{equation}
+the mixture analogue of the leading Wegner correction
+in~\eqref{eq:phi-wegner}.
+
+\section{Prior}
+
+Collect the inferred scalars into
+\begin{equation}
+  \psi
+    = \bigl(
+        T_c,\, \nu,\, \beta,\,
+        \omega,\, \kappa,\,
+        \ell_f,\, \eta_f,\, \ell_g,\, \sigma_g
+      \bigr)
+\end{equation}
+(components that are held fixed are simply omitted from $\psi$).
+The prior factorises:
+\begin{align}
+  p(\psi)
+    &= p(T_c)\, p(\nu)\, p(\beta)
+  \nonumber\\
+    &\qquad
+      \times p(\omega)\, p(\kappa)
+  \nonumber\\
+    &\qquad
+      \times p(\ell_f)\, p(\eta_f)\, p(\ell_g)\, p(\sigma_g).
+\end{align}
+Explicitly (matching the defaults used in the code),
+\begin{align}
+  T_c
+    &\sim \mathrm{Uniform}(2.0,\, 2.5),
+  \\
+  \nu
+    &\sim \mathrm{Uniform}(0.5,\, 1.5),
+  \\
+  \beta
+    &\sim \mathrm{Uniform}(0.05,\, 0.25),
+  \\
+  \omega
+    &\sim \mathrm{Uniform}(1,\, 10),
+  \\
+  \kappa
+    &\sim \mathrm{Uniform}(0,\, 20),
+  \\
+  \ell_f
+    &\sim \mathrm{LogNormal}\bigl(\log \ell_f^{\star},\, \sigma_\ell\bigr),
+  \\
+  \eta_f
+    &\sim \mathrm{HalfNormal}(\sigma_{\eta_f}),
+  \\
+  \ell_g
+    &\sim \mathrm{LogNormal}\bigl(\log \ell_g^{\star},\, \sigma_\ell\bigr)
+      \quad\text{(or tied to $\ell_f$)},
+  \\
+  \sigma_g
+    &\sim \mathrm{HalfNormal}(1),
+\end{align}
+where $\ell_f^{\star},\ell_g^{\star}$ are data-dependent length-scale
+guesses (fractions of the provisional $z$-span) and
+$\sigma_\ell,\sigma_{\eta_f}$ are fixed prior scales.
+Independently of $\psi$, the latent fields have GP priors
+\begin{equation}
+  p\bigl(\{f^{(c)},g^{(c)}\}_c \bigm| \psi\bigr)
+    = \prod_{c\in\{m,m^2,m^4\}}
+      \mathrm{GP}(f^{(c)};\ell_f,\eta_f)\,
+      \mathrm{GP}(g^{(c)};\ell_g,\sigma_g).
+\end{equation}
+
+\section{Likelihood}
+
+Conditional on the latents and $\psi$, channels are independent and
+Gaussian:
+\begin{equation}
+  p\bigl(D \bigm| \{f^{(c)},g^{(c)}\}_c,\, \psi\bigr)
+    = \prod_{c\in\{m,m^2,m^4\}}
+      \prod_{i=1}^{n}
+      \mathcal{N}\!\bigl(
+        \Phi^{(c)}_i \;\big|\;
+        (1-\pi_i)\, f^{(c)}(z_i) + \pi_i\, g^{(c)}(z_i),\;
+        \sigma_{\Phi_c,i}^2
+      \bigr).
+\end{equation}
+Integrating out $(f^{(c)},g^{(c)})$ analytically gives the marginal
+likelihood used for inference:
+\begin{equation}
+  p(D\mid\psi)
+    = \prod_{c\in\{m,m^2,m^4\}}
+      \mathcal{N}\!\bigl(\Phi^{(c)} \;\big|\; 0,\, K^{(c)}(\psi)\bigr),
+\end{equation}
+with channel covariances
+\begin{equation}
+  \label{eq:K-mixture}
+  K^{(c)}_{ij}(\psi)
+    = (1-\pi_i)(1-\pi_j)\, k_{\ell_f,\eta_f}(z_i,z_j)
+      + \pi_i\pi_j\, k_{\ell_g,\sigma_g}(z_i,z_j)
+      + \sigma_{\Phi_c,i}^2\, \delta_{ij},
+\end{equation}
+where $\pi_i = \pi(t_i,L_i)$ from~\eqref{eq:pi-gate}.
+Writing this out,
+\begin{align}
+  \log p(D\mid\psi)
+    &= \sum_{c\in\{m,m^2,m^4\}}
+      \Biggl[
+        -\tfrac12\, {\Phi^{(c)}}^\top
+          \bigl(K^{(c)}\bigr)^{-1} \Phi^{(c)}
+  \nonumber\\
+    &\qquad\qquad
+        -\tfrac12\log\det K^{(c)}
+        -\tfrac{n}{2}\log(2\pi)
+      \Biggr].
+\end{align}
+(If a channel is disabled, omit its term.)
+
+\section{Posterior}
+
+Bayes' rule then gives
+\begin{equation}
+  p(\psi\mid D)
+    \propto
+    p(\psi)\, p(D\mid\psi).
+\end{equation}
+Sampling targets $\psi$ with the latent GPs integrated out; predictions
+for $f^{(c)}$ and $g^{(c)}$ are recovered from the usual GP posterior
+conditional on each draw of $\psi$.
+
+\begin{thebibliography}{9}
+
+\bibitem{harada}
+  K.~Harada,
+  \emph{Bayesian inference of the critical exponents from finite-size
+  scaling analysis},
+  Phys.\ Rev.\ E \textbf{84}, 056704 (2011).
+
+\end{thebibliography}
+
+\end{document}

@@ -8,6 +8,9 @@ import pytest
 from ising.constants import TC_EXACT
 from ising.discrepancy import (
     discrepancy_amplitude,
+    discrepancy_amplitude_fss,
+    discrepancy_mix_weight,
+    discrepancy_q_prior_bounds,
     effective_obs_sigma,
     point_weight,
 )
@@ -23,6 +26,37 @@ def test_discrepancy_amplitude_grows_at_small_L_large_t():
     a_near = discrepancy_amplitude(t=0.01, L=256.0, t0=0.1, L0=32.0, p=2.0, q=2.0)
     a_far = discrepancy_amplitude(t=1.0, L=8.0, t0=0.1, L0=32.0, p=2.0, q=2.0)
     assert float(a_far) > float(a_near)
+
+
+def test_discrepancy_amplitude_fss_matches_z_rewrite():
+    t = np.array([0.0, 0.05, -0.2])
+    L = np.array([8.0, 32.0, 128.0])
+    omega, kappa, nu = 2.0, 1.5, 1.0
+    z = t * L ** (1.0 / nu)
+    got = discrepancy_amplitude_fss(t, L, omega=omega, kappa=kappa, nu=nu)
+    expected = L ** (-omega) * (1.0 + kappa * np.abs(z) ** (omega * nu))
+    np.testing.assert_allclose(got, expected)
+
+
+def test_discrepancy_amplitude_fss_vanishes_in_scaling_limit():
+    a = discrepancy_amplitude_fss(t=0.0, L=1e6, omega=2.0, kappa=1.0, nu=1.0)
+    assert float(a) == pytest.approx(0.0, abs=1e-8)
+
+
+def test_discrepancy_q_prior_bounds_fss_is_uniform_1_to_10():
+    assert discrepancy_q_prior_bounds("additive_gp_fss") == (1.0, 10.0)
+    assert discrepancy_q_prior_bounds("additive_gp") == (0.5, 4.0)
+
+
+def test_discrepancy_mix_weight_squash_and_clip():
+    a = np.array([0.0, 1.0, 3.0])
+    pi = discrepancy_mix_weight(a, squash=True)
+    np.testing.assert_allclose(pi, np.array([0.0, 0.5, 0.75]))
+    np.testing.assert_allclose(
+        discrepancy_mix_weight(np.array([-1.0, 0.5, 1.5]), squash=False),
+        np.array([0.0, 0.5, 1.0]),
+    )
+    assert 0.0 <= float(discrepancy_mix_weight(1e6)) < 1.0
 
 
 def test_effective_sigma_matches_mc_when_a_zero():

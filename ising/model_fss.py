@@ -177,7 +177,7 @@ def build_fss_model(
     infer_gp_hyperparams: bool = False,
     omega_prior_lower: float = OMEGA_PRIOR_LOWER,
     omega_prior_upper: float = OMEGA_PRIOR_UPPER,
-    gp_ell_prior_sigma: float = 0.35,
+    gp_ell_prior_sigma: float = 1.0,
     infer_Tc: bool = False,
     infer_nu: bool = True,
     infer_beta: bool = False,

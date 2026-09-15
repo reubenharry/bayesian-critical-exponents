@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from .constants import SPATIAL_DIMENSION, TC_EXACT, NU_EXACT
-from .gp_kernels import DEFAULT_GP_KERNEL
+from .gp_kernels import DEFAULT_GP_KERNEL, config_universal_kernel, is_polynomial_universal_kernel
 from .gp_utils import (
     correction_gp_log_marginal_likelihood as _correction_gp_log_ml_numpy,
     gp_log_marginal_likelihood as _gp_log_ml_numpy,
@@ -59,6 +59,33 @@ class FssGpScales:
     correction_gp_eta: float
 
 
+def default_gp_ell_profile_grid(
+    ell_min: float = 0.02,
+    ell_max: float = 10.0,
+    n: int = 17,
+) -> np.ndarray:
+    """Log-spaced ℓ_f grid for profiling the universal-GP length scale."""
+    lo = max(float(ell_min), 1e-6)
+    hi = max(float(ell_max), lo * (1.0 + 1e-9))
+    n_pts = max(int(n), 1)
+    return np.logspace(np.log10(lo), np.log10(hi), n_pts, dtype=np.float64)
+
+
+def _as_gp_ell_grid(
+    gp_ell: float | None,
+    gp_ell_grid: np.ndarray | None,
+    *,
+    default_ell: float,
+) -> np.ndarray:
+    if gp_ell_grid is not None:
+        grid = np.asarray(gp_ell_grid, dtype=np.float64).ravel()
+        if grid.size < 1:
+            raise ValueError("gp_ell_grid must contain at least one length scale")
+        return np.maximum(grid, 1e-6)
+    ell = default_ell if gp_ell is None else float(gp_ell)
+    return np.array([max(ell, 1e-6)], dtype=np.float64)
+
+
 @dataclass(frozen=True)
 class CompiledFssLikelihoodJax:
     """JIT-compiled FSS marginal likelihood with vmap'd profile helpers."""
@@ -70,25 +97,11 @@ class CompiledFssLikelihoodJax:
     profile_nu: Callable[[np.ndarray, float, float], np.ndarray]
     profile_beta: Callable[[np.ndarray, float, float], np.ndarray]
     profile_joint: Callable[[np.ndarray, np.ndarray, str, float, float, float], np.ndarray]
-    profile_joint_with_disc: Callable[
-        [
-            np.ndarray,
-            np.ndarray,
-            str,
-            float,
-            float,
-            float,
-            float,
-            float,
-            float,
-            float,
-            float,
-        ],
-        np.ndarray,
-    ]
+    profile_joint_with_disc: Callable[..., np.ndarray]
     profile_joint_tc_nu_with_disc: Callable[
         [np.ndarray, np.ndarray, float, float, float, float, float, float], np.ndarray
     ]
+    profile_gp_ell: Callable[..., np.ndarray]
     profile_triple_grid: Callable[
         [np.ndarray, np.ndarray, np.ndarray], np.ndarray
     ]
@@ -100,6 +113,80 @@ class CompiledFssLikelihoodJax:
 
 def _config_gp_kernel(config) -> str:
     return getattr(config, "gp_kernel", DEFAULT_GP_KERNEL)
+
+
+MIN_Z_WINDOW_POINTS = 3
+
+
+def _config_max_abs_z(config) -> float | None:
+    value = getattr(config, "max_abs_z", None)
+    if value is None:
+        return None
+    value = float(value)
+    if value <= 0.0:
+        raise ValueError(f"max_abs_z must be positive, got {value}")
+    return value
+
+
+def _mask_fss_likelihood_arrays(
+    arrays: FssLikelihoodArrays,
+    keep: np.ndarray,
+) -> FssLikelihoodArrays:
+    keep = np.asarray(keep, dtype=bool)
+
+    def _pick(value: np.ndarray | None) -> np.ndarray | None:
+        return None if value is None else value[keep]
+
+    return FssLikelihoodArrays(
+        L=arrays.L[keep],
+        T=arrays.T[keep],
+        magnetization=_pick(arrays.magnetization),
+        sigma_m=_pick(arrays.sigma_m),
+        log_m=_pick(arrays.log_m),
+        sigma_log=_pick(arrays.sigma_log),
+        m2=_pick(arrays.m2),
+        sigma_m2=_pick(arrays.sigma_m2),
+        m4=_pick(arrays.m4),
+        sigma_m4=_pick(arrays.sigma_m4),
+        binder=_pick(arrays.binder),
+        sigma_binder=_pick(arrays.sigma_binder),
+        chi=_pick(arrays.chi),
+        sigma_chi=_pick(arrays.sigma_chi),
+    )
+
+
+def apply_max_abs_z_window(
+    arrays: FssLikelihoodArrays,
+    config,
+) -> FssLikelihoodArrays:
+    """Restrict to |z| <= max_abs_z using provisional z at exact (T_c, nu).
+
+    Matches Harada-style local fits: the window is fixed in advance from the
+    nominal collapse axis, not recomputed at each MCMC draw.
+    """
+    max_abs_z = _config_max_abs_z(config)
+    if max_abs_z is None:
+        return arrays
+    z_ref = provisional_z(arrays.L, arrays.T, T_c=TC_EXACT, nu=NU_EXACT)
+    keep = np.abs(z_ref) <= max_abs_z
+    n_keep = int(keep.sum())
+    if n_keep < MIN_Z_WINDOW_POINTS:
+        raise ValueError(
+            f"max_abs_z={max_abs_z} retains {n_keep} points; "
+            f"need at least {MIN_Z_WINDOW_POINTS}"
+        )
+    return _mask_fss_likelihood_arrays(arrays, keep)
+
+
+def validate_universal_kernel_config(config) -> None:
+    """Reject incompatible universal-kernel / correction combinations."""
+    if is_polynomial_universal_kernel(config_universal_kernel(config)) and uses_fss_correction(
+        config
+    ):
+        raise ValueError(
+            "polynomial universal kernels (poly2, poly4, ...) require all "
+            "correction_* flags to be False (plain f_0(z) only for now)"
+        )
 
 
 @dataclass(frozen=True)
@@ -388,10 +475,12 @@ def _linear_moment_channel_log_ml(
     omega: float,
     backend: LikelihoodBackend,
     kernel: str = DEFAULT_GP_KERNEL,
+    universal_kernel: str | None = None,
 ) -> float:
     power = float(moment) * beta / nu
     phi = values * L**power
     sigma_phi = sigma * L**power
+    plain_kernel = kernel if universal_kernel is None else universal_kernel
     if correction:
         return _correction_gp_log_ml(
             z,
@@ -415,7 +504,7 @@ def _linear_moment_channel_log_ml(
         amplitude=scales.base_gp_eta,
         jitter=GP_JITTER,
         backend=backend,
-        kernel=kernel,
+        kernel=plain_kernel,
     )
 
 
@@ -440,6 +529,8 @@ def fss_log_marginal_likelihood_from_arrays(
         z=z, config=config, scales=scales
     )
     gp_kernel = _config_gp_kernel(config)
+    universal_kernel = config_universal_kernel(config)
+    validate_universal_kernel_config(config)
 
     log_ml = 0.0
 
@@ -458,7 +549,7 @@ def fss_log_marginal_likelihood_from_arrays(
                 amplitude=scales.base_gp_eta,
                 jitter=GP_JITTER,
                 backend=backend,
-                kernel=gp_kernel,
+                kernel=universal_kernel,
             )
         elif config.correction_m:
             phi_m = arrays.magnetization * arrays.L ** (beta / nu)
@@ -488,7 +579,7 @@ def fss_log_marginal_likelihood_from_arrays(
                 amplitude=scales.base_gp_eta,
                 jitter=GP_JITTER,
                 backend=backend,
-                kernel=gp_kernel,
+                kernel=universal_kernel,
             )
 
     if config.use_m2:
@@ -506,6 +597,7 @@ def fss_log_marginal_likelihood_from_arrays(
             omega=omega,
             backend=backend,
             kernel=gp_kernel,
+            universal_kernel=universal_kernel,
         )
 
     if config.use_m4:
@@ -523,6 +615,7 @@ def fss_log_marginal_likelihood_from_arrays(
             omega=omega,
             backend=backend,
             kernel=gp_kernel,
+            universal_kernel=universal_kernel,
         )
 
     if config.use_binder:
@@ -551,7 +644,7 @@ def fss_log_marginal_likelihood_from_arrays(
                 amplitude=scales.base_gp_eta,
                 jitter=GP_JITTER,
                 backend=backend,
-                kernel=gp_kernel,
+                kernel=universal_kernel,
             )
 
     if config.use_chi:
@@ -585,7 +678,7 @@ def fss_log_marginal_likelihood_from_arrays(
                 amplitude=scales.base_gp_eta,
                 jitter=GP_JITTER,
                 backend=backend,
-                kernel=gp_kernel,
+                kernel=universal_kernel,
             )
 
     return float(log_ml)
@@ -601,7 +694,7 @@ def fss_log_marginal_likelihood(
     backend: LikelihoodBackend = "numpy",
 ) -> float:
     """Sum of marginalized GP channel log-likelihoods at fixed exponents."""
-    arrays = extract_likelihood_arrays(observables, config)
+    arrays = apply_max_abs_z_window(extract_likelihood_arrays(observables, config), config)
     return fss_log_marginal_likelihood_from_arrays(
         arrays,
         config,
@@ -624,12 +717,16 @@ def compile_fss_log_marginal_likelihood_jax(
 
     configure_jax()
 
-    arrays = extract_likelihood_arrays(observables, config)
+    validate_universal_kernel_config(config)
+    universal_kernel = config_universal_kernel(config)
+
+    arrays = apply_max_abs_z_window(extract_likelihood_arrays(observables, config), config)
     scales = fss_gp_scales(
         arrays.L,
         arrays.T,
         **_gp_ell_kwargs(config),
     )
+    max_abs_z = _config_max_abs_z(config)
 
     L = jnp.asarray(arrays.L)
     T = jnp.asarray(arrays.T)
@@ -658,6 +755,9 @@ def compile_fss_log_marginal_likelihood_jax(
         "discrepancy_binder": bool(getattr(config, "discrepancy_binder", False)),
         "discrepancy_chi": bool(getattr(config, "discrepancy_chi", False)),
         "discrepancy_form": str(getattr(config, "discrepancy_form", "noise")),
+        "discrepancy_coupling": str(
+            getattr(config, "discrepancy_coupling", "additive")
+        ),
         "z_disc_threshold": float(
             getattr(config, "z_disc_threshold", 10.0)
         ),
@@ -671,6 +771,8 @@ def compile_fss_log_marginal_likelihood_jax(
         "correction_gp_eta": scales.correction_gp_eta,
         "fixed_z_span": scales.z_span,
         "gp_kernel": _config_gp_kernel(config),
+        "universal_kernel": universal_kernel,
+        "max_abs_z": max_abs_z,
     }
 
     channel_arrays: dict[str, jnp.ndarray | None] = {
@@ -732,8 +834,15 @@ def compile_fss_log_marginal_likelihood_jax(
         disc_p: float,
         disc_q: float,
         disc_sigma_model: float,
+        obs_sigma_scale: float,
         infer_gp_hyperparams: bool,
+        disc_gp_ell: float = -1.0,
     ) -> jnp.ndarray:
+        """Log ML with caller-controlled GP / discrepancy knobs.
+
+        ``disc_gp_ell <= 0`` (default) keeps the discrepancy GP ``g`` on the
+        same length scale as ``f``.
+        """
         z = _collapse_z_jax(T_c, nu)
         t = (T - T_c) / T_c
         log_ml = jnp.array(0.0, dtype=jnp.float64)
@@ -742,7 +851,11 @@ def compile_fss_log_marginal_likelihood_jax(
         def _amplitude() -> jnp.ndarray:
             return (jnp.abs(t) / disc_t0) ** disc_p + (disc_L0 / L) ** disc_q
 
+        def _obs_sigma(sigma: jnp.ndarray) -> jnp.ndarray:
+            return sigma * obs_sigma_scale
+
         def _inflate(sigma: jnp.ndarray, *, enabled: bool) -> jnp.ndarray:
+            sigma = _obs_sigma(sigma)
             if not enabled or static["discrepancy_form"] != "noise":
                 return sigma
             return jnp.sqrt(sigma**2 + (disc_sigma_model * _amplitude()) ** 2)
@@ -756,43 +869,71 @@ def compile_fss_log_marginal_likelihood_jax(
             amplitude: jnp.ndarray | float,
             phi_scale: jnp.ndarray | float | None = None,
         ) -> jnp.ndarray:
-            """Plain GP, noise-inflated GP, or additive a·g GP.
+            """Plain GP, noise-inflated GP, or gated a·g GP.
 
             Additive form is defined on the *raw* observable
             ``raw = phi_scale^{-1} f(z) + a(t,L) g(z) + ε`` (slide; Φ₁
             dropped).  With collapsed ``y = raw * phi_scale`` this is
             ``y = f + (a * phi_scale) g + ε_y``.  Pass ``phi_scale = L^{β/ν}``
             for magnetization, ``L^{2β/ν}`` for ``m²``, ``1`` for Binder, etc.
+
+            Mixture / weighted replace the collapsed coefficient ``a`` with a
+            unit gate ``π`` (``a/(1+a)``, or ``a`` itself when it is already 0/1)
+            so ``y = (1-π) f + π g + ε`` or ``y = (1-π) f + ε``.
             """
             form = static["discrepancy_form"]
-            if disc_enabled and form in (
+            coupling = static["discrepancy_coupling"]
+            gp_disc_forms = (
                 "additive_gp",
                 "additive_gp_z_threshold",
-            ):
+                "additive_gp_fss",
+            )
+            if disc_enabled and form in gp_disc_forms:
                 if form == "additive_gp_z_threshold":
                     # Collapsed-space gate: a=1 for |z|>threshold, else 0.
-                    a_collapsed = jnp.where(
+                    a_window = jnp.where(
                         jnp.abs(z) > static["z_disc_threshold"],
                         1.0,
                         0.0,
                     )
+                    a_collapsed = a_window
+                elif form == "additive_gp_fss":
+                    # Collapsed-space a = L^{-ω} + κ |t|^{ω ν}.
+                    # Slot mapping: disc_q = ω, disc_t0 = κ.
+                    omega = disc_q
+                    kappa = disc_t0
+                    a_window = L ** (-omega) + kappa * jnp.abs(t) ** (
+                        omega * nu
+                    )
+                    a_collapsed = a_window
                 else:
-                    a_raw = _amplitude()
+                    a_window = _amplitude()
                     if phi_scale is None:
-                        a_collapsed = a_raw
+                        a_collapsed = a_window
                     else:
-                        a_collapsed = a_raw * phi_scale
+                        a_collapsed = a_window * phi_scale
+                if coupling in ("mixture", "weighted"):
+                    if form == "additive_gp_z_threshold":
+                        a_for_gp = a_window
+                    else:
+                        a_for_gp = a_window / (1.0 + a_window)
+                else:
+                    a_for_gp = a_collapsed
+                # disc_gp_ell <= 0 keeps the old behaviour: g shares f's ℓ.
+                ell_g = jnp.where(disc_gp_ell > 0.0, disc_gp_ell, length_scale)
                 return disc_gp_jax(
                     z,
                     y,
-                    sigma,
-                    a_collapsed,
+                    _obs_sigma(sigma),
+                    a_for_gp,
                     gp_ell=length_scale,
                     gp_eta=amplitude,
-                    disc_gp_ell=length_scale,
+                    disc_gp_ell=ell_g,
                     disc_gp_eta=disc_sigma_model,
                     jitter=GP_JITTER,
                     kernel=static["gp_kernel"],
+                    universal_kernel=static["universal_kernel"],
+                    coupling=coupling,
                 )
             return gp_jax(
                 z,
@@ -801,7 +942,7 @@ def compile_fss_log_marginal_likelihood_jax(
                 length_scale=length_scale,
                 amplitude=amplitude,
                 jitter=GP_JITTER,
-                kernel=static["gp_kernel"],
+                kernel=static["universal_kernel"],
             )
 
         if static["use_m"]:
@@ -974,6 +1115,7 @@ def compile_fss_log_marginal_likelihood_jax(
             elif static["discrepancy_chi"] and static["discrepancy_form"] in (
                 "additive_gp",
                 "additive_gp_z_threshold",
+                "additive_gp_fss",
             ):
                 # Slide model is additive on χ; fit linear Φ_χ so
                 # Φ = f + a L^{-γ/ν} g.
@@ -1020,6 +1162,7 @@ def compile_fss_log_marginal_likelihood_jax(
             DISCREPANCY_P_INIT,
             DISCREPANCY_Q_INIT,
             DISCREPANCY_SIGMA_MODEL_INIT,
+            1.0,
             False,
         )
 
@@ -1079,18 +1222,25 @@ def compile_fss_log_marginal_likelihood_jax(
         disc_p: float,
         disc_q: float,
         disc_sigma_model: float,
+        gp_ell_grid: jnp.ndarray,
+        gp_eta: float,
+        obs_sigma_scale: float,
+        disc_gp_ell: float,
     ) -> jnp.ndarray:
-        """log ML on a joint pair with slider-controlled discrepancy params."""
+        """log ML on a joint pair; max over ``gp_ell_grid`` at each cell."""
         x_grid = jnp.asarray(x_grid, dtype=jnp.float64)
         y_grid = jnp.asarray(y_grid, dtype=jnp.float64)
+        gp_ell_grid = jnp.asarray(gp_ell_grid, dtype=jnp.float64)
 
-        def _eval_exponents(T_c: float, nu_v: float, beta_v: float) -> jnp.ndarray:
+        def _eval_exponents(
+            T_c: float, nu_v: float, beta_v: float, gp_ell: float
+        ) -> jnp.ndarray:
             return evaluate_with_gp(
                 T_c,
                 nu_v,
                 beta_v,
-                static["base_gp_ell"],
-                static["base_gp_eta"],
+                gp_ell,
+                gp_eta,
                 static["correction_gp_ell"],
                 static["correction_gp_eta"],
                 disc_t0,
@@ -1098,17 +1248,22 @@ def compile_fss_log_marginal_likelihood_jax(
                 disc_p,
                 disc_q,
                 disc_sigma_model,
+                obs_sigma_scale,
                 False,
+                disc_gp_ell,
             )
 
         def eval_xy(x: float, y: float) -> jnp.ndarray:
-            if pair == "T_c_nu":
-                return _eval_exponents(x, y, beta)
-            if pair == "T_c_beta":
-                return _eval_exponents(x, nu, y)
-            if pair == "nu_beta":
-                return _eval_exponents(tc, x, y)
-            raise ValueError(f"Unsupported joint pair {pair!r}")
+            def eval_ell(ell: float) -> jnp.ndarray:
+                if pair == "T_c_nu":
+                    return _eval_exponents(x, y, beta, ell)
+                if pair == "T_c_beta":
+                    return _eval_exponents(x, nu, y, ell)
+                if pair == "nu_beta":
+                    return _eval_exponents(tc, x, y, ell)
+                raise ValueError(f"Unsupported joint pair {pair!r}")
+
+            return jnp.max(jax.vmap(eval_ell)(gp_ell_grid))
 
         return jax.vmap(jax.vmap(eval_xy, in_axes=(None, 0)), in_axes=(0, None))(
             x_grid, y_grid
@@ -1141,9 +1296,53 @@ def compile_fss_log_marginal_likelihood_jax(
             disc_p,
             disc_q,
             disc_sigma_model,
+            jnp.asarray([static["base_gp_ell"]], dtype=jnp.float64),
+            static["base_gp_eta"],
+            1.0,
+            -1.0,
         )
 
     profile_joint_tc_nu_with_disc_jit = jax.jit(_profile_joint_tc_nu_with_disc_jit)
+
+    def _profile_gp_ell_jit(
+        gp_ell_grid: jnp.ndarray,
+        tc: float,
+        nu: float,
+        beta: float,
+        disc_t0: float,
+        disc_L0: float,
+        disc_p: float,
+        disc_q: float,
+        disc_sigma_model: float,
+        gp_eta: float,
+        obs_sigma_scale: float,
+        disc_gp_ell: float,
+    ) -> jnp.ndarray:
+        """log ML vs ℓ_f at a fixed exponent / discrepancy point."""
+        gp_ell_grid = jnp.asarray(gp_ell_grid, dtype=jnp.float64)
+
+        def eval_ell(ell: float) -> jnp.ndarray:
+            return evaluate_with_gp(
+                tc,
+                nu,
+                beta,
+                ell,
+                gp_eta,
+                static["correction_gp_ell"],
+                static["correction_gp_eta"],
+                disc_t0,
+                disc_L0,
+                disc_p,
+                disc_q,
+                disc_sigma_model,
+                obs_sigma_scale,
+                False,
+                disc_gp_ell,
+            )
+
+        return jax.vmap(eval_ell)(gp_ell_grid)
+
+    profile_gp_ell_jit = jax.jit(_profile_gp_ell_jit)
 
     @jax.jit
     def triple_grid_jit(
@@ -1178,10 +1377,28 @@ def compile_fss_log_marginal_likelihood_jax(
         profile_joint=lambda xg, yg, pair, tc, nu, beta: _to_numpy(
             profile_joint_jit(xg, yg, pair, tc, nu, beta).T
         ),
-        profile_joint_with_disc=lambda xg, yg, pair, tc, nu, beta, t0, L0, p, q, sigma_model: (
+        profile_joint_with_disc=lambda xg, yg, pair, tc, nu, beta, t0, L0, p, q, sigma_model, gp_ell=None, gp_eta=None, gp_ell_grid=None, obs_sigma_scale=1.0, disc_gp_ell=None: (
             _to_numpy(
                 profile_joint_with_disc_jit(
-                    xg, yg, pair, tc, nu, beta, t0, L0, p, q, sigma_model
+                    xg,
+                    yg,
+                    pair,
+                    tc,
+                    nu,
+                    beta,
+                    t0,
+                    L0,
+                    p,
+                    q,
+                    sigma_model,
+                    _as_gp_ell_grid(
+                        None if gp_ell is None else float(gp_ell),
+                        gp_ell_grid,
+                        default_ell=scales.base_gp_ell,
+                    ),
+                    scales.base_gp_eta if gp_eta is None else float(gp_eta),
+                    float(obs_sigma_scale),
+                    -1.0 if disc_gp_ell is None else float(disc_gp_ell),
                 ).T
             )
         ),
@@ -1190,6 +1407,24 @@ def compile_fss_log_marginal_likelihood_jax(
                 profile_joint_tc_nu_with_disc_jit(
                     xg, yg, beta, t0, L0, p, q, sigma_model
                 ).T
+            )
+        ),
+        profile_gp_ell=lambda ell_grid, tc, nu, beta, t0, L0, p, q, sigma_model, gp_eta=None, obs_sigma_scale=1.0, disc_gp_ell=None: (
+            _to_numpy(
+                profile_gp_ell_jit(
+                    np.asarray(ell_grid, dtype=np.float64),
+                    tc,
+                    nu,
+                    beta,
+                    t0,
+                    L0,
+                    p,
+                    q,
+                    sigma_model,
+                    scales.base_gp_eta if gp_eta is None else float(gp_eta),
+                    float(obs_sigma_scale),
+                    -1.0 if disc_gp_ell is None else float(disc_gp_ell),
+                )
             )
         ),
         profile_triple_grid=lambda tcg, nug, betag: _to_numpy(
@@ -1213,12 +1448,31 @@ def profile_joint_with_disc(
     p: float,
     q: float,
     sigma_model: float,
+    gp_ell: float | None = None,
+    gp_eta: float | None = None,
+    gp_ell_grid: np.ndarray | None = None,
+    obs_sigma_scale: float = 1.0,
+    disc_gp_ell: float | None = None,
 ) -> np.ndarray:
     """Evaluate log ML on a joint exponent pair with fixed discrepancy params.
 
     ``pair`` is one of ``\"T_c_nu\"``, ``\"T_c_beta\"``, ``\"nu_beta\"``. The unused
     fixed exponent among ``(T_c, nu, beta)`` is ignored. Returns shape
     ``(len(y_grid), len(x_grid))``.
+
+    ``gp_ell`` / ``gp_eta`` override the compiled universal-GP hyperparameters
+    (the GP on ``f``).  ``None`` keeps the values baked in at compile time.
+
+    Pass ``gp_ell_grid`` to *profile out* ℓ_f: each heatmap cell is
+    ``max_{ℓ ∈ grid} log ML``.  A scalar ``gp_ell`` is ignored when the grid
+    is given.
+
+    ``obs_sigma_scale`` multiplies MC observation stds (1 = reported σ_MC).
+    This is *on top of* any ``config.obs_sigma_scale`` baked into the compiled
+    arrays; leave it at 1.0 unless you are varying the scale without recompile.
+
+    ``disc_gp_ell`` is the length scale of the discrepancy GP ``g`` (z-units).
+    ``None`` keeps ``g`` on the same ℓ as ``f`` (legacy).
     """
     return compiled.profile_joint_with_disc(
         np.asarray(x_grid, dtype=np.float64),
@@ -1232,6 +1486,47 @@ def profile_joint_with_disc(
         float(p),
         float(q),
         float(sigma_model),
+        None if gp_ell is None else float(gp_ell),
+        None if gp_eta is None else float(gp_eta),
+        None if gp_ell_grid is None else np.asarray(gp_ell_grid, dtype=np.float64),
+        float(obs_sigma_scale),
+        None if disc_gp_ell is None else float(disc_gp_ell),
+    )
+
+
+def profile_gp_ell(
+    compiled: CompiledFssLikelihoodJax,
+    ell_grid: np.ndarray,
+    *,
+    T_c: float,
+    nu: float,
+    beta: float,
+    t0: float,
+    L0: float,
+    p: float,
+    q: float,
+    sigma_model: float,
+    gp_eta: float | None = None,
+    obs_sigma_scale: float = 1.0,
+    disc_gp_ell: float | None = None,
+) -> np.ndarray:
+    """log ML vs universal-GP length scale at a fixed exponent point.
+
+    Returns shape ``(len(ell_grid),)``.
+    """
+    return compiled.profile_gp_ell(
+        np.asarray(ell_grid, dtype=np.float64),
+        float(T_c),
+        float(nu),
+        float(beta),
+        float(t0),
+        float(L0),
+        float(p),
+        float(q),
+        float(sigma_model),
+        None if gp_eta is None else float(gp_eta),
+        float(obs_sigma_scale),
+        None if disc_gp_ell is None else float(disc_gp_ell),
     )
 
 

@@ -68,6 +68,8 @@ def _profile_config_from_fit_kwargs(
     correction_gp_ell_factor: float | None,
     correction_gp_eta: float | None,
     gp_kernel: str | None,
+    universal_kernel: str | None = None,
+    max_abs_z: float | None = None,
     obs_sigma_scale: float | None,
     infer_Tc: bool = True,
     infer_nu: bool = True,
@@ -109,6 +111,12 @@ def _profile_config_from_fit_kwargs(
         from .gp_kernels import normalize_gp_kernel
 
         kwargs["gp_kernel"] = normalize_gp_kernel(gp_kernel)
+    if universal_kernel is not None:
+        from .gp_kernels import normalize_gp_kernel
+
+        kwargs["universal_kernel"] = normalize_gp_kernel(universal_kernel)
+    if max_abs_z is not None:
+        kwargs["max_abs_z"] = float(max_abs_z)
     if obs_sigma_scale is not None:
         kwargs["obs_sigma_scale"] = obs_sigma_scale
     return FssProfileConfig(**kwargs)
@@ -300,6 +308,11 @@ def _attach_fss_fit_attrs(
     attrs["correction_gp_ell_factor"] = str(cfg.correction_gp_ell_factor)
     attrs["correction_gp_eta"] = str(cfg.correction_gp_eta)
     attrs["gp_kernel"] = str(cfg.gp_kernel)
+    attrs["universal_kernel"] = str(
+        cfg.universal_kernel if cfg.universal_kernel is not None else cfg.gp_kernel
+    )
+    if getattr(cfg, "max_abs_z", None) is not None:
+        attrs["max_abs_z"] = str(cfg.max_abs_z)
     attrs["omega_fixed"] = str(cfg.omega_fixed)
     any_correction = (
         (cfg.use_m and cfg.correction_m)
@@ -404,6 +417,8 @@ def fit_dataset(
     correction_gp_ell: float | None = None,
     correction_gp_eta: float | None = None,
     gp_kernel: str | None = None,
+    universal_kernel: str | None = None,
+    max_abs_z: float | None = None,
     obs_sigma_scale: float | None = None,
     use_log_m: bool = True,
     profile_mle_init: bool = False,
@@ -523,6 +538,8 @@ def fit_dataset(
             correction_gp_ell=correction_gp_ell,
             correction_gp_eta=correction_gp_eta,
             gp_kernel=gp_kernel,
+            universal_kernel=universal_kernel,
+            max_abs_z=max_abs_z,
             obs_sigma_scale=obs_sigma_scale,
             infer_Tc=infer_Tc,
             infer_nu=infer_nu,
@@ -610,15 +627,41 @@ def fit_dataset(
             )
             nuts_init_label = nuts_init if nuts_init is not None else "profile_mle"
 
-        if sampler_backend == "laps":
-            from .discrepancy import (
-                DISCREPANCY_L0_INIT,
-                DISCREPANCY_P_INIT,
-                DISCREPANCY_Q_INIT,
-                DISCREPANCY_SIGMA_MODEL_INIT,
-                DISCREPANCY_T0_INIT,
-            )
+        from .discrepancy import (
+            DISCREPANCY_L0_INIT,
+            DISCREPANCY_P_INIT,
+            DISCREPANCY_Q_INIT,
+            DISCREPANCY_SIGMA_MODEL_INIT,
+            DISCREPANCY_T0_INIT,
+        )
 
+        disc_fixed = dict(
+            infer_discrepancy=infer_discrepancy,
+            infer_disc_t0=infer_disc_t0,
+            infer_disc_L0=infer_disc_L0,
+            infer_disc_p=infer_disc_p,
+            infer_disc_q=infer_disc_q,
+            infer_disc_sigma_model=infer_disc_sigma_model,
+            fixed_disc_t0=(
+                DISCREPANCY_T0_INIT if fixed_disc_t0 is None else float(fixed_disc_t0)
+            ),
+            fixed_disc_L0=(
+                DISCREPANCY_L0_INIT if fixed_disc_L0 is None else float(fixed_disc_L0)
+            ),
+            fixed_disc_p=(
+                DISCREPANCY_P_INIT if fixed_disc_p is None else float(fixed_disc_p)
+            ),
+            fixed_disc_q=(
+                DISCREPANCY_Q_INIT if fixed_disc_q is None else float(fixed_disc_q)
+            ),
+            fixed_disc_sigma_model=(
+                DISCREPANCY_SIGMA_MODEL_INIT
+                if fixed_disc_sigma_model is None
+                else float(fixed_disc_sigma_model)
+            ),
+        )
+
+        if sampler_backend == "laps":
             idata = sample_fss_posterior_laps(
                 observables,
                 profile_config,
@@ -626,12 +669,6 @@ def fit_dataset(
                 infer_nu=infer_nu,
                 infer_beta=infer_beta,
                 infer_gp_hyperparams=infer_gp_hyperparams,
-                infer_discrepancy=infer_discrepancy,
-                infer_disc_t0=infer_disc_t0,
-                infer_disc_L0=infer_disc_L0,
-                infer_disc_p=infer_disc_p,
-                infer_disc_q=infer_disc_q,
-                infer_disc_sigma_model=infer_disc_sigma_model,
                 tune=tune,
                 draws=draws,
                 chains=chains,
@@ -643,25 +680,9 @@ def fit_dataset(
                 tc_prior_upper=tc_prior_hi,
                 tc_init=tc_init_eff,
                 fixed_Tc=tc_init_eff,
-                fixed_disc_t0=(
-                    DISCREPANCY_T0_INIT if fixed_disc_t0 is None else float(fixed_disc_t0)
-                ),
-                fixed_disc_L0=(
-                    DISCREPANCY_L0_INIT if fixed_disc_L0 is None else float(fixed_disc_L0)
-                ),
-                fixed_disc_p=(
-                    DISCREPANCY_P_INIT if fixed_disc_p is None else float(fixed_disc_p)
-                ),
-                fixed_disc_q=(
-                    DISCREPANCY_Q_INIT if fixed_disc_q is None else float(fixed_disc_q)
-                ),
-                fixed_disc_sigma_model=(
-                    DISCREPANCY_SIGMA_MODEL_INIT
-                    if fixed_disc_sigma_model is None
-                    else float(fixed_disc_sigma_model)
-                ),
                 mle_init=laps_mle_init,
                 progress_bar=True,
+                **disc_fixed,
             )
         else:
             idata = sample_fss_posterior_jax(
@@ -685,6 +706,7 @@ def fit_dataset(
                 fixed_Tc=tc_init_eff,
                 init_positions=jax_init_positions,
                 progress_bar=False,
+                **disc_fixed,
             )
         _attach_common_posterior_attrs(
             idata,
@@ -758,6 +780,10 @@ def fit_dataset(
         from .gp_kernels import normalize_gp_kernel
 
         build_kwargs["gp_kernel"] = normalize_gp_kernel(gp_kernel)
+    if universal_kernel is not None:
+        from .gp_kernels import normalize_gp_kernel
+
+        build_kwargs["universal_kernel"] = normalize_gp_kernel(universal_kernel)
     if obs_sigma_scale is not None:
         build_kwargs["obs_sigma_scale"] = obs_sigma_scale
     pymc_model = build_pipeline_model(observables, **build_kwargs)
@@ -826,6 +852,8 @@ def fit_dataset(
             correction_gp_ell_factor=correction_gp_ell_factor,
             correction_gp_eta=correction_gp_eta,
             gp_kernel=gp_kernel,
+            universal_kernel=universal_kernel,
+            max_abs_z=max_abs_z,
             obs_sigma_scale=obs_sigma_scale,
             infer_Tc=infer_Tc,
             infer_nu=infer_nu,
@@ -1091,7 +1119,11 @@ def main(argv: list[str] | None = None) -> Path:
     parser.add_argument(
         "--infer-gp-hyperparams",
         action="store_true",
-        help="Infer GP length scales and amplitudes (gp_ell, gp_eta, ...)",
+        help=(
+            "Infer GP length scales and amplitudes (gp_ell, gp_eta, ...) "
+            "instead of pinning ℓ_f by hand. Recommended: a fixed ℓ_f "
+            "partly identifies ν."
+        ),
     )
     parser.add_argument(
         "--use-m",
@@ -1176,7 +1208,12 @@ def main(argv: list[str] | None = None) -> Path:
     )
     parser.add_argument(
         "--discrepancy-form",
-        choices=("noise", "additive_gp", "additive_gp_z_threshold"),
+        choices=(
+            "noise",
+            "additive_gp",
+            "additive_gp_z_threshold",
+            "additive_gp_fss",
+        ),
         default=None,
         help="Discrepancy model (default: noise)",
     )
@@ -1286,6 +1323,24 @@ def main(argv: list[str] | None = None) -> Path:
         help=(
             "GP kernel on z: matern52 (default) or gaussian/harada "
             "(squared-exponential, Harada PRE 84)"
+        ),
+    )
+    parser.add_argument(
+        "--universal-kernel",
+        choices=("matern52", "gaussian", "harada", "poly2", "poly", "poly4", "quartic"),
+        default=None,
+        help=(
+            "Kernel for universal f_0(z); default follows --gp-kernel. "
+            "Use poly2/poly4 for marginalized monomial universal functions."
+        ),
+    )
+    parser.add_argument(
+        "--max-abs-z",
+        type=float,
+        default=None,
+        help=(
+            "Keep only points with |z| <= this (provisional z at exact T_c, nu); "
+            "Harada-style local window for polynomial universal fits"
         ),
     )
     parser.add_argument(
@@ -1415,6 +1470,8 @@ def main(argv: list[str] | None = None) -> Path:
         correction_gp_ell=args.correction_gp_ell,
         correction_gp_eta=args.correction_gp_eta,
         gp_kernel=args.gp_kernel,
+        universal_kernel=args.universal_kernel,
+        max_abs_z=args.max_abs_z,
         obs_sigma_scale=args.obs_sigma_scale,
         use_log_m=args.use_log_m,
         profile_mle_init=args.profile_mle_init,

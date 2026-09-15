@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytensor.tensor as pt
 from pytensor.tensor import slinalg
 
-from .gp_kernels import DEFAULT_GP_KERNEL, GpKernelKind, normalize_gp_kernel
+from .gp_kernels import (
+    DEFAULT_GP_KERNEL,
+    GpKernelKind,
+    normalize_gp_kernel,
+    polynomial_kernel_degree,
+)
 
 _LOG2PI = pt.log(2.0 * pt.pi)
 
@@ -38,6 +43,48 @@ def gaussian_kernel_1d(
     return (amplitude**2) * pt.exp(-0.5 * (r / ls) ** 2)
 
 
+def polynomial_kernel_1d(
+    x1: pt.TensorVariable,
+    x2: pt.TensorVariable,
+    *,
+    degree: int,
+    length_scale: pt.TensorVariable,
+    amplitude: pt.TensorVariable,
+) -> pt.TensorVariable:
+    """Monomial kernel k(x,x') = eta^2 sum_{k=0}^degree x^k x'^k."""
+    del length_scale
+    x1 = x1.flatten()
+    x2 = x2.flatten()
+    k = pt.zeros((x1.shape[0], x2.shape[0]))
+    for power in range(degree + 1):
+        k = k + (x1**power).dimshuffle(0, "x") * (x2**power).dimshuffle("x", 0)
+    return (amplitude**2) * k
+
+
+def poly2_kernel_1d(
+    x1: pt.TensorVariable,
+    x2: pt.TensorVariable,
+    length_scale: pt.TensorVariable,
+    amplitude: pt.TensorVariable,
+) -> pt.TensorVariable:
+    """Quadratic monomial kernel k(x,x') = eta^2 (1 + x x' + x^2 x'^2)."""
+    return polynomial_kernel_1d(
+        x1, x2, degree=2, length_scale=length_scale, amplitude=amplitude
+    )
+
+
+def poly4_kernel_1d(
+    x1: pt.TensorVariable,
+    x2: pt.TensorVariable,
+    length_scale: pt.TensorVariable,
+    amplitude: pt.TensorVariable,
+) -> pt.TensorVariable:
+    """Quartic monomial kernel through z^4."""
+    return polynomial_kernel_1d(
+        x1, x2, degree=4, length_scale=length_scale, amplitude=amplitude
+    )
+
+
 def stationary_kernel_1d(
     kernel: GpKernelKind | str,
     x1: pt.TensorVariable,
@@ -46,6 +93,11 @@ def stationary_kernel_1d(
     amplitude: pt.TensorVariable,
 ) -> pt.TensorVariable:
     kind = normalize_gp_kernel(kernel) if isinstance(kernel, str) else kernel
+    degree = polynomial_kernel_degree(kind)
+    if degree is not None:
+        return polynomial_kernel_1d(
+            x1, x2, degree=degree, length_scale=length_scale, amplitude=amplitude
+        )
     if kind == "gaussian":
         return gaussian_kernel_1d(x1, x2, length_scale, amplitude)
     return matern52_kernel_1d(x1, x2, length_scale, amplitude)

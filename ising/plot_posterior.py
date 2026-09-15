@@ -675,6 +675,7 @@ def _fss_correction_log_phi_predict(
     z_test: np.ndarray,
     L_test: np.ndarray,
 ) -> np.ndarray:
+    df = _df_for_fss_plot(df, idata)
     channel = _primary_fss_correction_channel(idata)
     if channel == "m":
         phi = _fss_binder_m_correction_predict(df, idata, draw, z_test, L_test)
@@ -702,6 +703,7 @@ def _fss_binder_f0_predict(
     z_test: np.ndarray,
 ) -> np.ndarray:
     """GP posterior mean of the universal Binder cumulant U_4(z) (f0 only)."""
+    df = _df_for_fss_plot(df, idata)
     nu = float(draw["nu"])
     T_c = float(draw.get("T_c", TC_EXACT))
     z_train, _, u4_train, sigma_u = _binder_correction_training_from_df(
@@ -717,6 +719,7 @@ def _fss_binder_f0_predict(
         z_test,
         length_scale=gp_hp["gp_ell"],
         amplitude=gp_hp["gp_eta"],
+        kernel=_universal_kernel_from_attrs(idata),
     )
     return mean
 
@@ -773,6 +776,57 @@ def _gp_params_from_attrs(idata: az.InferenceData) -> dict[str, float]:
     if eta_fixed is not None:
         out["gp_eta"] = float(eta_fixed)
     return out
+
+
+def _universal_kernel_from_attrs(idata: az.InferenceData) -> str:
+    from .gp_kernels import DEFAULT_GP_KERNEL, normalize_gp_kernel
+
+    raw = idata.posterior.attrs.get("universal_kernel")
+    if raw is None:
+        raw = idata.posterior.attrs.get("gp_kernel", DEFAULT_GP_KERNEL)
+    return normalize_gp_kernel(str(raw))
+
+
+def _max_abs_z_from_attrs(idata: az.InferenceData) -> float | None:
+    raw = idata.posterior.attrs.get("max_abs_z")
+    if raw is None:
+        return None
+    value = float(raw)
+    if value <= 0.0:
+        raise ValueError(f"max_abs_z must be positive, got {value}")
+    return value
+
+
+def _fit_window_mask(
+    df: pd.DataFrame,
+    max_abs_z: float | None,
+) -> np.ndarray | None:
+    """Boolean mask of rows in the fit window (provisional z at exact T_c, nu)."""
+    if max_abs_z is None:
+        return None
+    L = df["L"].to_numpy(dtype=np.float64)
+    T = df["T"].to_numpy(dtype=np.float64)
+    z_ref = z_from_LT(L, T, T_c=TC_EXACT, nu=NU_EXACT)
+    return np.abs(z_ref) <= max_abs_z
+
+
+def _z_grid_for_fit_window(max_abs_z: float, *, n_points: int = 200) -> np.ndarray:
+    pad = 0.05 * (2.0 * max_abs_z)
+    return np.linspace(-max_abs_z - pad, max_abs_z + pad, n_points)
+
+
+def _fit_window_title_suffix(max_abs_z: float | None) -> str:
+    if max_abs_z is None:
+        return ""
+    return rf" ($|z|\leq {max_abs_z:g}$ fit window)"
+
+
+def _df_for_fss_plot(df: pd.DataFrame, idata: az.InferenceData) -> pd.DataFrame:
+    """Observables rows included in the FSS fit (respects max_abs_z)."""
+    mask = _fit_window_mask(df, _max_abs_z_from_attrs(idata))
+    if mask is None:
+        return df
+    return df.loc[mask].reset_index(drop=True)
 
 
 def _is_crossover_model(idata: az.InferenceData) -> bool:
@@ -1377,6 +1431,12 @@ def _posterior_exponent_panel_specs(
 
     if _posterior_has(idata, "omega"):
         specs.append(("omega", r"$\omega$", OMEGA_EXACT, "exact"))
+    elif _posterior_has(idata, "disc_q"):
+        form = str(idata.posterior.attrs.get("discrepancy_form", ""))
+        if form == "additive_gp_fss":
+            specs.append(("disc_q", r"$\omega$", OMEGA_EXACT, "exact"))
+        else:
+            specs.append(("disc_q", r"$q$", None, ""))
 
     gp_specs = (
         ("gp_ell", r"$\ell_0$", "gp_ell_fixed", "gp_ell_prior_mu"),
@@ -2100,6 +2160,9 @@ def _z_grid_for_posterior(
     *,
     n_points: int = 200,
 ) -> np.ndarray:
+    max_abs_z = _max_abs_z_from_attrs(idata)
+    if max_abs_z is not None:
+        return _z_grid_for_fit_window(max_abs_z, n_points=n_points)
     if _posterior_has_scaling_trace(idata):
         z_obs = idata.posterior["z"].values.mean(axis=(0, 1))
     else:
@@ -2310,7 +2373,9 @@ def plot_scaling_function_posterior(
     """Plot log Phi_m(z) from the joint PyMC posterior (no post-hoc GP refit)."""
     obs = _obs_posterior_summary(idata, df=df, hdi_prob=hdi_prob)
     sample_idx = _draw_indices(idata, n_samples, seed)
-    z_grid = _z_grid_from_obs(obs["z_mean"], n_points=z_grid_points)
+    max_abs_z = _max_abs_z_from_attrs(idata)
+    fit_mask = _fit_window_mask(df, max_abs_z)
+    z_grid = _z_grid_for_posterior(idata, df, n_points=z_grid_points)
     L_ref = _reference_L(df)
     curve_samples = _scaling_curves_from_posterior(
         idata, z_grid, sample_idx, df=df, L_ref=L_ref
@@ -2344,6 +2409,10 @@ def plot_scaling_function_posterior(
     palette = {"16": "#1f77b4", "32": "#ff7f0e", "48": "#2ca02c"}
     for L_value in sorted(df["L"].unique()):
         mask = (df["L"] == L_value).to_numpy()
+        if fit_mask is not None:
+            mask = mask & fit_mask
+        if not np.any(mask):
+            continue
         color = palette.get(str(int(L_value)), "#4c72b0")
         if _log_phi_fixed_at_obs(idata):
             xerr = None
@@ -2411,6 +2480,7 @@ def plot_scaling_function_posterior(
         )
     else:
         title = r"Scaling function from joint posterior on $\log\Phi_m$, $T_c$, $\nu$, $\beta$"
+    title += _fit_window_title_suffix(max_abs_z)
     ax.set_title(title)
     ax.legend(loc="best", fontsize=8)
     path = out_dir / "scaling_function_posterior.png"
@@ -2581,6 +2651,7 @@ def _log_m_log_phi_gp_conditional(
     include_gp_epistemic_std: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """GP conditional on MC log targets; returns (log_phi, log_m) at test points."""
+    df = _df_for_fss_plot(df, idata)
     nu = float(draw["nu"])
     beta = float(draw["beta"])
     T_c = float(draw.get("T_c", TC_EXACT))
@@ -2632,6 +2703,7 @@ def _log_m_log_phi_gp_conditional(
                 z_test,
                 length_scale=gp_hp["gp_ell"],
                 amplitude=gp_hp["gp_eta"],
+                kernel=_universal_kernel_from_attrs(idata),
             )
         if include_gp_epistemic_std and rng is not None:
             phi = np.maximum(phi_mean + rng.normal(0.0, phi_std), 1e-12)
@@ -2657,6 +2729,7 @@ def _log_m_log_phi_gp_conditional(
             sigma_log_train=sigma_log_train,
             length_scale=gp_hp["gp_ell"],
             amplitude=gp_hp["gp_eta"],
+            kernel=_universal_kernel_from_attrs(idata),
         )
         if include_gp_epistemic_std and rng is not None:
             log_phi = log_phi_mean + rng.normal(0.0, log_phi_std)
@@ -3355,6 +3428,9 @@ def _trace_var_names(idata: az.InferenceData) -> list[str]:
         names.extend(_inferred_gp_var_names(idata))
         if _posterior_has(idata, "omega"):
             names.append("omega")
+        for name in ("disc_q", "disc_t0", "disc_sigma_model"):
+            if _posterior_has(idata, name):
+                names.append(name)
         return names
     return ["T_c", "nu", "beta", *_inferred_gp_var_names(idata)]
 
@@ -3448,28 +3524,37 @@ def plot_posterior_sample_scaling_curves(
     """Plot a few joint-posterior scaling curves log Phi_m(z)."""
     fig, ax = plt.subplots(figsize=(7, 5), constrained_layout=True)
     cmap = plt.cm.plasma(np.linspace(0.15, 0.85, n_samples))
+    max_abs_z = _max_abs_z_from_attrs(idata)
+    fit_mask = _fit_window_mask(df, max_abs_z) if df is not None else None
     z_grid = _z_grid_for_posterior(idata, df, n_points=200)
 
     for color, flat_idx in zip(cmap, _draw_indices(idata, n_samples, seed)):
         draw = _select_draw(idata, int(flat_idx))
         curve = _eval_log_target_on_grid(idata, draw, z_grid, df=df)
         ax.plot(z_grid, curve, color=color, alpha=0.8, linewidth=1.5)
-        z_obs, log_phi_obs = _obs_scaling_at_points(df, idata, draw)
-        ax.scatter(
-            z_obs,
-            log_phi_obs,
-            s=35,
-            color=color,
-            alpha=0.85,
-            edgecolors="white",
-            linewidths=0.5,
-            zorder=5,
-        )
+        if df is not None:
+            z_obs, log_phi_obs = _obs_scaling_at_points(df, idata, draw)
+            if fit_mask is not None:
+                z_obs = z_obs[fit_mask]
+                log_phi_obs = log_phi_obs[fit_mask]
+            ax.scatter(
+                z_obs,
+                log_phi_obs,
+                s=35,
+                color=color,
+                alpha=0.85,
+                edgecolors="white",
+                linewidths=0.5,
+                zorder=5,
+            )
 
     ax.set_xlabel(r"$z = t L^{1/\nu}$")
     ax.set_ylabel(_scaling_function_log_label(idata))
     title_channel = "Binder cumulant" if _fss_binder_only(idata) else "scaling functions"
-    ax.set_title(f"{n_samples} joint-posterior {title_channel}")
+    ax.set_title(
+        f"{n_samples} joint-posterior {title_channel}"
+        + _fit_window_title_suffix(max_abs_z)
+    )
     path = out_dir / "posterior_sample_scaling_curves.png"
     fig.savefig(path, dpi=150)
     plt.close(fig)

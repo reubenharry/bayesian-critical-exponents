@@ -2,12 +2,39 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import jax
 import jax.numpy as jnp
 
-from .gp_kernels import DEFAULT_GP_KERNEL, GpKernelKind, normalize_gp_kernel
+from .gp_kernels import (
+    DEFAULT_GP_KERNEL,
+    GpKernelKind,
+    normalize_gp_kernel,
+    polynomial_kernel_degree,
+)
 
 _LOG2PI = jnp.log(2.0 * jnp.pi)
+
+DiscCoupling = Literal["additive", "mixture", "weighted"]
+
+
+def _discrepancy_weights(
+    a: jax.Array,
+    coupling: DiscCoupling | str,
+) -> tuple[jax.Array, jax.Array]:
+    """Return ``(w_f, w_g)`` so ``y = w_f f + w_g g + ε``.
+
+    ``a`` is the collapsed g-coefficient (additive) or the unit gate ``π``
+    (mixture / weighted).
+    """
+    a = jnp.ravel(a)
+    ones = jnp.ones_like(a)
+    if coupling == "weighted":
+        return ones - a, jnp.zeros_like(a)
+    if coupling == "mixture":
+        return ones - a, a
+    return ones, a
 
 
 def matern52_kernel(
@@ -43,6 +70,51 @@ def gaussian_kernel(
     return (amp**2) * jnp.exp(-0.5 * (r / ls) ** 2)
 
 
+def polynomial_kernel(
+    x1: jax.Array,
+    x2: jax.Array,
+    *,
+    degree: int,
+    length_scale: jax.Array | float,
+    amplitude: jax.Array | float,
+) -> jax.Array:
+    """Monomial kernel k(x,x') = eta^2 sum_{k=0}^degree x^k x'^k."""
+    del length_scale
+    x1 = jnp.ravel(x1)
+    x2 = jnp.ravel(x2)
+    amp = jnp.asarray(amplitude)
+    k = jnp.zeros((x1.shape[0], x2.shape[0]), dtype=x1.dtype)
+    for power in range(degree + 1):
+        k = k + (x1[:, None] ** power) * (x2[None, :] ** power)
+    return (amp**2) * k
+
+
+def poly2_kernel(
+    x1: jax.Array,
+    x2: jax.Array,
+    *,
+    length_scale: jax.Array | float,
+    amplitude: jax.Array | float,
+) -> jax.Array:
+    """Quadratic monomial kernel k(x,x') = eta^2 (1 + x x' + x^2 x'^2)."""
+    return polynomial_kernel(
+        x1, x2, degree=2, length_scale=length_scale, amplitude=amplitude
+    )
+
+
+def poly4_kernel(
+    x1: jax.Array,
+    x2: jax.Array,
+    *,
+    length_scale: jax.Array | float,
+    amplitude: jax.Array | float,
+) -> jax.Array:
+    """Quartic monomial kernel through z^4."""
+    return polynomial_kernel(
+        x1, x2, degree=4, length_scale=length_scale, amplitude=amplitude
+    )
+
+
 def stationary_kernel(
     kernel: GpKernelKind | str,
     x1: jax.Array,
@@ -52,6 +124,11 @@ def stationary_kernel(
     amplitude: jax.Array | float,
 ) -> jax.Array:
     kind = normalize_gp_kernel(kernel) if isinstance(kernel, str) else kernel
+    degree = polynomial_kernel_degree(kind)
+    if degree is not None:
+        return polynomial_kernel(
+            x1, x2, degree=degree, length_scale=length_scale, amplitude=amplitude
+        )
     fn = gaussian_kernel if kind == "gaussian" else matern52_kernel
     return fn(x1, x2, length_scale=length_scale, amplitude=amplitude)
 
@@ -143,32 +220,41 @@ def discrepancy_gp_log_marginal_likelihood(
     disc_gp_ell: jax.Array | float,
     disc_gp_eta: jax.Array | float,
     kernel: GpKernelKind | str = DEFAULT_GP_KERNEL,
+    universal_kernel: GpKernelKind | str | None = None,
     jitter: float = 1e-5,
+    coupling: DiscCoupling | str = "additive",
 ) -> jax.Array:
-    """Log marginal likelihood for y = f(z) + a * g(z) + noise.
+    """Log marginal likelihood for a gated two-GP observation of ``y``.
 
     Independent zero-mean GPs ``f`` and ``g`` on the collapsed coordinate
-    ``z``.  Here ``a`` is the *collapsed-space* amplitude multiplying ``g``
-    (for magnetization slide form ``m = L^{-β/ν} f + a_raw g``, pass
-    ``a = a_raw * L^{β/ν}`` so that ``y = Φ = m L^{β/ν}``).
+    ``z``.  ``coupling`` chooses the observation model (``a`` is already
+    the collapsed g-coefficient or the unit gate ``π``)::
+
+        additive:  y = f + a g + ε
+        mixture:   y = (1-a) f + a g + ε
+        weighted:  y = (1-a) f + ε
 
     Marginal covariance::
 
-        K_ij = η² k_ℓ(z_i, z_j) + σ_g² a_i a_j k_ℓg(z_i, z_j) + δ_ij (σ_i² + ε)
+        K_ij = w_f_i w_f_j η² k_ℓ(z_i, z_j)
+             + w_g_i w_g_j σ_g² k_ℓg(z_i, z_j)
+             + δ_ij (σ_i² + ε)
     """
     z = jnp.ravel(z)
     y = jnp.ravel(y)
     sigma = jnp.ravel(sigma)
     a = jnp.ravel(a)
     n = z.shape[0]
+    w_f, w_g = _discrepancy_weights(a, coupling)
 
-    k0 = stationary_kernel(
-        kernel, z, z, length_scale=gp_ell, amplitude=gp_eta
-    )
-    kg = stationary_kernel(
-        kernel, z, z, length_scale=disc_gp_ell, amplitude=disc_gp_eta
-    )
-    k = k0 + a[:, None] * kg * a[None, :]
+    uk = kernel if universal_kernel is None else universal_kernel
+    k0 = stationary_kernel(uk, z, z, length_scale=gp_ell, amplitude=gp_eta)
+    k = w_f[:, None] * k0 * w_f[None, :]
+    if coupling != "weighted":
+        kg = stationary_kernel(
+            kernel, z, z, length_scale=disc_gp_ell, amplitude=disc_gp_eta
+        )
+        k = k + w_g[:, None] * kg * w_g[None, :]
     k = k.at[jnp.diag_indices(n)].add(sigma**2 + jitter)
 
     chol = jax.scipy.linalg.cholesky(k, lower=True)
@@ -179,6 +265,60 @@ def discrepancy_gp_log_marginal_likelihood(
         - 0.5 * log_det
         - 0.5 * n * _LOG2PI
     )
+
+
+def discrepancy_f_posterior_predictive(
+    z_train: jax.Array,
+    y_train: jax.Array,
+    sigma_train: jax.Array,
+    a_train: jax.Array,
+    z_new: jax.Array,
+    *,
+    gp_ell: jax.Array | float,
+    gp_eta: jax.Array | float,
+    disc_gp_ell: jax.Array | float,
+    disc_gp_eta: jax.Array | float,
+    kernel: GpKernelKind | str = DEFAULT_GP_KERNEL,
+    jitter: float = 1e-5,
+    coupling: DiscCoupling | str = "additive",
+) -> tuple[jax.Array, jax.Array]:
+    """Posterior mean and std of the universal GP ``f``.
+
+    Uses ``E[f(z_*)|y] = k_{f,y}(z_*, z) K^{-1} y`` with the same marginal
+    ``K`` as ``discrepancy_gp_log_marginal_likelihood``.  For mixture /
+    weighted, ``cov(f_*, y_j) = k_f(z_*, z_j) w_{f,j}``.
+    """
+    z_train = jnp.ravel(z_train)
+    y_train = jnp.ravel(y_train)
+    sigma_train = jnp.ravel(sigma_train)
+    a_train = jnp.ravel(a_train)
+    z_new = jnp.ravel(z_new)
+    n = z_train.shape[0]
+    w_f, w_g = _discrepancy_weights(a_train, coupling)
+
+    k0_tt = stationary_kernel(
+        kernel, z_train, z_train, length_scale=gp_ell, amplitude=gp_eta
+    )
+    k_yy = w_f[:, None] * k0_tt * w_f[None, :]
+    if coupling != "weighted":
+        kg_tt = stationary_kernel(
+            kernel, z_train, z_train, length_scale=disc_gp_ell, amplitude=disc_gp_eta
+        )
+        k_yy = k_yy + w_g[:, None] * kg_tt * w_g[None, :]
+    k_yy = k_yy.at[jnp.diag_indices(n)].add(sigma_train**2 + jitter)
+    chol = jax.scipy.linalg.cholesky(k_yy, lower=True)
+    alpha = jax.scipy.linalg.cho_solve((chol, True), y_train)
+    k0_st = stationary_kernel(
+        kernel, z_new, z_train, length_scale=gp_ell, amplitude=gp_eta
+    )
+    k_fy = k0_st * w_f[None, :]
+    mean = k_fy @ alpha
+    v = jax.scipy.linalg.solve_triangular(chol, k_fy.T, lower=True)
+    k0_ss = stationary_kernel(
+        kernel, z_new, z_new, length_scale=gp_ell, amplitude=gp_eta
+    )
+    var = jnp.diag(k0_ss) - jnp.sum(v * v, axis=0)
+    return mean, jnp.sqrt(jnp.maximum(var, 0.0))
 
 
 def discrepancy_f_posterior_mean(
@@ -194,33 +334,24 @@ def discrepancy_f_posterior_mean(
     disc_gp_eta: jax.Array | float,
     kernel: GpKernelKind | str = DEFAULT_GP_KERNEL,
     jitter: float = 1e-5,
+    coupling: DiscCoupling | str = "additive",
 ) -> jax.Array:
-    """Posterior mean of the universal GP ``f`` under y = f(z) + a g(z) + noise.
-
-    Uses ``E[f(z_*)|y] = k_f(z_*, z) K^{-1} y`` with the additive-GP marginal
-    covariance ``K`` (same as ``discrepancy_gp_log_marginal_likelihood``).
-    """
-    z_train = jnp.ravel(z_train)
-    y_train = jnp.ravel(y_train)
-    sigma_train = jnp.ravel(sigma_train)
-    a_train = jnp.ravel(a_train)
-    z_new = jnp.ravel(z_new)
-    n = z_train.shape[0]
-
-    k0_tt = stationary_kernel(
-        kernel, z_train, z_train, length_scale=gp_ell, amplitude=gp_eta
+    """Posterior mean of the universal GP ``f`` under y = f(z) + a g(z) + noise."""
+    mean, _ = discrepancy_f_posterior_predictive(
+        z_train,
+        y_train,
+        sigma_train,
+        a_train,
+        z_new,
+        gp_ell=gp_ell,
+        gp_eta=gp_eta,
+        disc_gp_ell=disc_gp_ell,
+        disc_gp_eta=disc_gp_eta,
+        kernel=kernel,
+        jitter=jitter,
+        coupling=coupling,
     )
-    kg_tt = stationary_kernel(
-        kernel, z_train, z_train, length_scale=disc_gp_ell, amplitude=disc_gp_eta
-    )
-    k_yy = k0_tt + a_train[:, None] * kg_tt * a_train[None, :]
-    k_yy = k_yy.at[jnp.diag_indices(n)].add(sigma_train**2 + jitter)
-    chol = jax.scipy.linalg.cholesky(k_yy, lower=True)
-    alpha = jax.scipy.linalg.cho_solve((chol, True), y_train)
-    k0_st = stationary_kernel(
-        kernel, z_new, z_train, length_scale=gp_ell, amplitude=gp_eta
-    )
-    return k0_st @ alpha
+    return mean
 
 
 def _gp_posterior_kernel_system(

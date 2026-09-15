@@ -17,6 +17,7 @@ from .fss_likelihood import (
     CompiledFssLikelihoodJax,
     LikelihoodBackend,
     compile_fss_log_marginal_likelihood_jax,
+    validate_universal_kernel_config,
 )
 from .model_fss import beta_affects_fss_likelihood, compile_fss_exponent_log_likelihood
 from .model_fss import TC_DELTA_SCALE
@@ -30,7 +31,12 @@ from .model_scaling_nu import (
     TC_PRIOR_LOWER,
     TC_PRIOR_UPPER,
 )
-from .gp_kernels import DEFAULT_GP_KERNEL, GpKernelKind, normalize_gp_kernel
+from .gp_kernels import (
+    DEFAULT_GP_KERNEL,
+    DEFAULT_UNIVERSAL_KERNEL,
+    GpKernelKind,
+    normalize_gp_kernel,
+)
 from .observables import read_harada_binder_observables, read_observables_for_fss
 
 # --- edit these (run.py imports these for profile + fit) ---
@@ -52,12 +58,17 @@ CORRECTION_CHI = False
 # Form: "noise" inflates σ; "additive_gp" uses raw = L^{-β/ν} f(z) + a g(z) + ε
 # (collapsed: Φ = f + a L^{β/ν} g + ε_Φ; analogous L-powers for m², …).
 # "additive_gp_z_threshold" uses collapsed a = 1_{|z|>Z_DISC_THRESHOLD} (else 0).
+# "additive_gp_fss" uses collapsed a = L^{-ω} + κ |t|^{ω ν}.
+# Coupling (GP forms): "additive" Φ=f+a g; "mixture" Φ=(1-π)f+π g; "weighted" Φ=(1-π)f.
 DISCREPANCY_M = False
 DISCREPANCY_M2 = False
 DISCREPANCY_M4 = False
 DISCREPANCY_BINDER = False
 DISCREPANCY_CHI = False
-DISCREPANCY_FORM: Literal["noise", "additive_gp", "additive_gp_z_threshold"] = "noise"
+DISCREPANCY_FORM: Literal[
+    "noise", "additive_gp", "additive_gp_z_threshold", "additive_gp_fss"
+] = "noise"
+DISCREPANCY_COUPLING: Literal["additive", "mixture", "weighted"] = "additive"
 # Gate for additive_gp_z_threshold: a=1 for |z| > this, else 0 (collapsed Φ-space).
 Z_DISC_THRESHOLD = 10.0
 
@@ -122,8 +133,11 @@ class FssProfileConfig:
     discrepancy_binder: bool = DISCREPANCY_BINDER
     discrepancy_chi: bool = DISCREPANCY_CHI
     discrepancy_form: Literal[
-        "noise", "additive_gp", "additive_gp_z_threshold"
+        "noise", "additive_gp", "additive_gp_z_threshold", "additive_gp_fss"
     ] = DISCREPANCY_FORM
+    discrepancy_coupling: Literal["additive", "mixture", "weighted"] = (
+        DISCREPANCY_COUPLING
+    )
     z_disc_threshold: float = Z_DISC_THRESHOLD
     use_log_m: bool = USE_LOG_M
     omega_fixed: float = OMEGA_EXACT
@@ -134,6 +148,8 @@ class FssProfileConfig:
     correction_gp_ell: float | None = CORRECTION_GP_ELL
     correction_gp_eta: float = CORRECTION_GP_ETA
     gp_kernel: GpKernelKind = GP_KERNEL
+    universal_kernel: GpKernelKind | None = DEFAULT_UNIVERSAL_KERNEL
+    max_abs_z: float | None = None
     obs_sigma_scale: float = OBS_SIGMA_SCALE
     infer_Tc: bool = True
     infer_nu: bool = True
@@ -162,6 +178,7 @@ def default_profile_config() -> FssProfileConfig:
         discrepancy_binder=DISCREPANCY_BINDER,
         discrepancy_chi=DISCREPANCY_CHI,
         discrepancy_form=DISCREPANCY_FORM,
+        discrepancy_coupling=DISCREPANCY_COUPLING,
         z_disc_threshold=Z_DISC_THRESHOLD,
         use_log_m=USE_LOG_M,
         gp_ell_factor=GP_ELL_FACTOR,
@@ -198,6 +215,7 @@ def _validate_profile_config(config: FssProfileConfig) -> None:
         raise ValueError(
             "At least one of use_m, use_m2, use_m4, use_binder, or use_chi must be True"
         )
+    validate_universal_kernel_config(config)
 
 
 ProfileObservables = pd.DataFrame
@@ -270,6 +288,8 @@ def _profile_build_kwargs(config: FssProfileConfig) -> dict[str, object]:
         "correction_gp_ell": config.correction_gp_ell,
         "correction_gp_eta": config.correction_gp_eta,
         "gp_kernel": config.gp_kernel,
+        "universal_kernel": config.universal_kernel,
+        "max_abs_z": config.max_abs_z,
         "obs_sigma_scale": config.obs_sigma_scale,
         "infer_Tc": config.infer_Tc,
         "infer_nu": config.infer_nu,
@@ -1652,6 +1672,25 @@ def add_fss_profile_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--universal-kernel",
+        choices=("matern52", "gaussian", "harada", "poly2", "poly", "poly4", "quartic"),
+        default=None,
+        help=(
+            "Kernel for the universal scaling function f_0(z). Defaults to "
+            "--gp-kernel; use poly2/poly4 for marginalized monomials. "
+            "Discrepancy GPs still use --gp-kernel."
+        ),
+    )
+    parser.add_argument(
+        "--max-abs-z",
+        type=float,
+        default=None,
+        help=(
+            "Keep only points with |z| <= this on the provisional collapse axis "
+            "at exact (T_c, nu); for local polynomial / Harada-style windows"
+        ),
+    )
+    parser.add_argument(
         "--use-log-m",
         action=argparse.BooleanOptionalAction,
         default=USE_LOG_M,
@@ -1682,6 +1721,12 @@ def fss_profile_config_from_args(args: argparse.Namespace) -> FssProfileConfig:
         correction_gp_ell_factor=args.correction_gp_ell_factor,
         correction_gp_eta=args.correction_gp_eta,
         gp_kernel=normalize_gp_kernel(args.gp_kernel),
+        universal_kernel=(
+            None
+            if args.universal_kernel is None
+            else normalize_gp_kernel(args.universal_kernel)
+        ),
+        max_abs_z=args.max_abs_z,
         obs_sigma_scale=args.obs_sigma_scale,
         use_log_m=args.use_log_m,
         likelihood_backend=args.likelihood_backend,
@@ -1699,7 +1744,10 @@ def _print_profile_config(config: FssProfileConfig) -> None:
         f"correction_chi={config.correction_chi}, use_log_m={config.use_log_m}"
     )
     print(
-        f"  GP: kernel={config.gp_kernel}, gp_ell_factor={config.gp_ell_factor:g}, "
+        f"  GP: kernel={config.gp_kernel}, "
+        f"universal_kernel={config.universal_kernel or config.gp_kernel}, "
+        f"max_abs_z={config.max_abs_z}, "
+        f"gp_ell_factor={config.gp_ell_factor:g}, "
         f"gp_eta={config.gp_eta:g}, "
         f"correction_gp_ell_factor={config.correction_gp_ell_factor:g}, "
         f"correction_gp_eta={config.correction_gp_eta:g}, "

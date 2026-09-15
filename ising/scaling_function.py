@@ -28,7 +28,7 @@ class ScalingFunctionConfig:
     spline_rw_sigma: float = 1.0
     knot_pad_fraction: float = 0.6
     gp_ell_prior_mu: float | None = None
-    gp_ell_prior_sigma: float = 0.35
+    gp_ell_prior_sigma: float = 1.0
     gp_ell_fixed: float | None = None
     gp_eta_fixed: float | None = None
     gp_kernel: GpKernelKind = DEFAULT_GP_KERNEL

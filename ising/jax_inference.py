@@ -36,6 +36,7 @@ from .discrepancy import (
     DISCREPANCY_T0_INIT,
     DISCREPANCY_T0_PRIOR_LOWER,
     DISCREPANCY_T0_PRIOR_UPPER,
+    discrepancy_q_prior_bounds,
 )
 from .jax_config import configure_jax, jax_device_summary
 from .model_fss import (
@@ -47,6 +48,7 @@ from .model_fss import (
     beta_affects_fss_likelihood,
 )
 from .model_scaling_nu import TC_PRIOR_LOWER, TC_PRIOR_UPPER
+from .gp_kernels import GpKernelKind, config_universal_kernel, is_polynomial_universal_kernel
 from .profile_likelihood import FssProfileConfig
 
 LAPS_DEFAULT_CHAINS = 200
@@ -66,7 +68,9 @@ _LAPS_INIT_JITTER = {
     "disc_sigma_model": 0.05,
 }
 
-DEFAULT_GP_ELL_PRIOR_SIGMA = 0.35
+# Weakly informative LogNormal on ℓ_f (z-units). σ=1 covers a factor ~e^{2}≈7.4
+# at 95%, so the prior median (compile-time scale guess) is not a hard choice.
+DEFAULT_GP_ELL_PRIOR_SIGMA = 1.0
 
 
 @dataclass(frozen=True)
@@ -181,6 +185,14 @@ class FssJaxInferenceLayout:
     infer_disc_p: bool = False
     infer_disc_q: bool = False
     infer_disc_sigma_model: bool = False
+    universal_kernel: GpKernelKind = "gaussian"
+
+    @property
+    def infer_gp_ell(self) -> bool:
+        return (
+            self.infer_gp_hyperparams
+            and not is_polynomial_universal_kernel(self.universal_kernel)
+        )
 
     @property
     def ndim(self) -> int:
@@ -255,6 +267,12 @@ class FssJaxInferenceLayout:
             slot.log_prior_unconstrained(unconstrained[i]) for i, slot in enumerate(self.slots)
         ]
         return jnp.sum(jnp.stack(terms))
+
+    def uniform_slot_bounds(self, name: str) -> tuple[float, float] | None:
+        for slot in self.slots:
+            if slot.name == name and isinstance(slot, FssJaxUniformSlot):
+                return slot.lower, slot.upper
+        return None
 
     def _initial_value_map(
         self,
@@ -444,6 +462,9 @@ def build_fss_inference_layout(
     fixed_disc_p: float = DISCREPANCY_P_INIT,
     fixed_disc_q: float = DISCREPANCY_Q_INIT,
     fixed_disc_sigma_model: float = DISCREPANCY_SIGMA_MODEL_INIT,
+    disc_q_prior_lower: float | None = None,
+    disc_q_prior_upper: float | None = None,
+    universal_kernel: GpKernelKind = "gaussian",
 ) -> FssJaxInferenceLayout:
     tc_ref = float(fixed_Tc) if tc_reparam_ref is None else float(tc_reparam_ref)
     sample_disc_default = uses_discrepancy and (
@@ -480,13 +501,14 @@ def build_fss_inference_layout(
     if infer_beta:
         slots.append(FssJaxUniformSlot("beta", beta_prior_lower, beta_prior_upper))
     if infer_gp_hyperparams:
-        slots.append(
-            FssJaxLognormalSlot(
-                "gp_ell",
-                mu=float(np.log(base_gp_ell)),
-                sigma=gp_ell_prior_sigma,
+        if not is_polynomial_universal_kernel(universal_kernel):
+            slots.append(
+                FssJaxLognormalSlot(
+                    "gp_ell",
+                    mu=float(np.log(base_gp_ell)),
+                    sigma=gp_ell_prior_sigma,
+                )
             )
-        )
         slots.append(
             FssJaxHalfNormalSlot(
                 "gp_eta",
@@ -526,11 +548,17 @@ def build_fss_inference_layout(
             )
         )
     if free_disc_q:
-        slots.append(
-            FssJaxUniformSlot(
-                "disc_q", DISCREPANCY_Q_PRIOR_LOWER, DISCREPANCY_Q_PRIOR_UPPER
-            )
+        q_lo = (
+            DISCREPANCY_Q_PRIOR_LOWER
+            if disc_q_prior_lower is None
+            else float(disc_q_prior_lower)
         )
+        q_hi = (
+            DISCREPANCY_Q_PRIOR_UPPER
+            if disc_q_prior_upper is None
+            else float(disc_q_prior_upper)
+        )
+        slots.append(FssJaxUniformSlot("disc_q", q_lo, q_hi))
     if free_disc_sigma_model:
         slots.append(
             FssJaxHalfNormalSlot(
@@ -568,6 +596,7 @@ def build_fss_inference_layout(
         infer_disc_p=free_disc_p,
         infer_disc_q=free_disc_q,
         infer_disc_sigma_model=free_disc_sigma_model,
+        universal_kernel=universal_kernel,
     )
 
 
@@ -650,6 +679,10 @@ def compile_fss_log_posterior(
     )
     uses_correction = uses_fss_correction(config)
     uses_discrepancy = uses_fss_discrepancy(config)
+    disc_q_lo, disc_q_hi = discrepancy_q_prior_bounds(
+        str(getattr(config, "discrepancy_form", "noise"))
+    )
+    universal_kernel = config_universal_kernel(config)
     layout = build_fss_inference_layout(
         infer_Tc=infer_Tc,
         infer_nu=infer_nu,
@@ -681,6 +714,9 @@ def compile_fss_log_posterior(
         fixed_disc_p=fixed_disc_p,
         fixed_disc_q=fixed_disc_q,
         fixed_disc_sigma_model=fixed_disc_sigma_model,
+        disc_q_prior_lower=disc_q_lo,
+        disc_q_prior_upper=disc_q_hi,
+        universal_kernel=universal_kernel,
     )
     likelihood = compile_fss_log_marginal_likelihood_jax(observables, config)
 
@@ -704,6 +740,7 @@ def compile_fss_log_posterior(
             disc_p,
             disc_q,
             disc_sigma_model,
+            1.0,  # extra s_σ; config.obs_sigma_scale is already in the arrays
             infer_gp_hyperparams,
         )
         if layout.ndim == 0:
@@ -845,6 +882,17 @@ def sample_fss_posterior_jax(
     fixed_Tc: float = TC_EXACT,
     fixed_nu: float = NU_EXACT,
     fixed_beta: float = BETA_EXACT,
+    infer_discrepancy: bool | None = None,
+    infer_disc_t0: bool | None = None,
+    infer_disc_L0: bool | None = None,
+    infer_disc_p: bool | None = None,
+    infer_disc_q: bool | None = None,
+    infer_disc_sigma_model: bool | None = None,
+    fixed_disc_t0: float = DISCREPANCY_T0_INIT,
+    fixed_disc_L0: float = DISCREPANCY_L0_INIT,
+    fixed_disc_p: float = DISCREPANCY_P_INIT,
+    fixed_disc_q: float = DISCREPANCY_Q_INIT,
+    fixed_disc_sigma_model: float = DISCREPANCY_SIGMA_MODEL_INIT,
     init_positions: Sequence[jnp.ndarray] | None = None,
     progress_bar: bool = False,
 ) -> az.InferenceData:
@@ -861,6 +909,12 @@ def sample_fss_posterior_jax(
         infer_nu=infer_nu,
         infer_beta=infer_beta,
         infer_gp_hyperparams=infer_gp_hyperparams,
+        infer_discrepancy=infer_discrepancy,
+        infer_disc_t0=infer_disc_t0,
+        infer_disc_L0=infer_disc_L0,
+        infer_disc_p=infer_disc_p,
+        infer_disc_q=infer_disc_q,
+        infer_disc_sigma_model=infer_disc_sigma_model,
         gp_ell_prior_sigma=gp_ell_prior_sigma,
         reparametrize_Tc=reparametrize_Tc,
         tc_reparam_ref=tc_reparam_ref,
@@ -870,6 +924,11 @@ def sample_fss_posterior_jax(
         fixed_Tc=fixed_Tc,
         fixed_nu=fixed_nu,
         fixed_beta=fixed_beta,
+        fixed_disc_t0=fixed_disc_t0,
+        fixed_disc_L0=fixed_disc_L0,
+        fixed_disc_p=fixed_disc_p,
+        fixed_disc_q=fixed_disc_q,
+        fixed_disc_sigma_model=fixed_disc_sigma_model,
     )
     layout = posterior.layout
     if layout.ndim == 0:
@@ -901,7 +960,6 @@ def sample_fss_posterior_jax(
             blackjax.nuts,
             posterior.logdensity,
             target_acceptance_rate=target_accept,
-            progress_bar=show_progress,
         )
         adapt_result, _ = warmup.run(adapt_key, position, num_steps=tune)
         nuts = blackjax.nuts(posterior.logdensity, **adapt_result.parameters)
@@ -910,7 +968,6 @@ def sample_fss_posterior_jax(
             nuts,
             num_steps=draws,
             initial_state=adapt_result.state,
-            progress_bar=show_progress,
             transform=lambda state, _info: state.position,
         )
         return history
@@ -999,9 +1056,10 @@ def _make_laps_sample_init(
         correction_gp_ell = jnp.asarray(layout.fixed_correction_gp_ell, dtype=jnp.float64)
         correction_gp_eta = jnp.asarray(layout.fixed_correction_gp_eta, dtype=jnp.float64)
         if infer_gp_hyperparams:
-            gp_ell = layout.fixed_gp_ell * jnp.exp(
-                jax.random.normal(key_gp_ell) * jitter["gp_ell"]
-            )
+            if layout.infer_gp_ell:
+                gp_ell = layout.fixed_gp_ell * jnp.exp(
+                    jax.random.normal(key_gp_ell) * jitter["gp_ell"]
+                )
             gp_eta = layout.fixed_gp_eta * jnp.exp(
                 jax.random.normal(key_gp_eta) * jitter["gp_eta"]
             )
@@ -1036,10 +1094,16 @@ def _make_laps_sample_init(
                 DISCREPANCY_P_PRIOR_UPPER,
             )
         if layout.infer_disc_q:
+            q_bounds = layout.uniform_slot_bounds("disc_q")
+            q_lo, q_hi = (
+                q_bounds
+                if q_bounds is not None
+                else (DISCREPANCY_Q_PRIOR_LOWER, DISCREPANCY_Q_PRIOR_UPPER)
+            )
             disc_q = jnp.clip(
                 layout.fixed_disc_q + jax.random.normal(key_q) * jitter["disc_q"],
-                DISCREPANCY_Q_PRIOR_LOWER,
-                DISCREPANCY_Q_PRIOR_UPPER,
+                q_lo,
+                q_hi,
             )
         if layout.infer_disc_sigma_model:
             disc_sigma_model = jnp.maximum(
@@ -1222,6 +1286,8 @@ def profile_config_from_fit_kwargs(
     correction_gp_ell_factor: float | None,
     correction_gp_eta: float | None,
     gp_kernel: str | None,
+    universal_kernel: str | None = None,
+    max_abs_z: float | None = None,
     obs_sigma_scale: float | None,
     infer_Tc: bool = True,
     infer_nu: bool = True,
@@ -1281,6 +1347,10 @@ def profile_config_from_fit_kwargs(
         kwargs["correction_gp_eta"] = correction_gp_eta
     if gp_kernel is not None:
         kwargs["gp_kernel"] = normalize_gp_kernel(gp_kernel)
+    if universal_kernel is not None:
+        kwargs["universal_kernel"] = normalize_gp_kernel(universal_kernel)
+    if max_abs_z is not None:
+        kwargs["max_abs_z"] = float(max_abs_z)
     if obs_sigma_scale is not None:
         kwargs["obs_sigma_scale"] = obs_sigma_scale
     return FssProfileConfig(**kwargs)

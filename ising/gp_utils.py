@@ -2,9 +2,31 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
-from .gp_kernels import DEFAULT_GP_KERNEL, GpKernelKind, normalize_gp_kernel
+from .gp_kernels import (
+    DEFAULT_GP_KERNEL,
+    GpKernelKind,
+    normalize_gp_kernel,
+    polynomial_kernel_degree,
+)
+
+DiscCoupling = Literal["additive", "mixture", "weighted"]
+
+
+def _discrepancy_weights(
+    a: np.ndarray,
+    coupling: DiscCoupling | str,
+) -> tuple[np.ndarray, np.ndarray]:
+    a = np.asarray(a, dtype=np.float64).ravel()
+    ones = np.ones_like(a)
+    if coupling == "weighted":
+        return ones - a, np.zeros_like(a)
+    if coupling == "mixture":
+        return ones - a, a
+    return ones, a
 
 
 def matern52_kernel(
@@ -40,6 +62,51 @@ def gaussian_kernel(
     return (amp**2) * np.exp(-0.5 * (r / ls) ** 2)
 
 
+def polynomial_kernel(
+    x1: np.ndarray,
+    x2: np.ndarray,
+    *,
+    degree: int,
+    length_scale: float,
+    amplitude: float,
+) -> np.ndarray:
+    """Monomial kernel k(x,x') = eta^2 sum_{k=0}^degree x^k x'^k."""
+    del length_scale
+    x1 = np.asarray(x1, dtype=np.float64).ravel()
+    x2 = np.asarray(x2, dtype=np.float64).ravel()
+    amp = float(amplitude)
+    k = np.zeros((x1.size, x2.size), dtype=np.float64)
+    for power in range(degree + 1):
+        k += (x1[:, None] ** power) * (x2[None, :] ** power)
+    return (amp**2) * k
+
+
+def poly2_kernel(
+    x1: np.ndarray,
+    x2: np.ndarray,
+    *,
+    length_scale: float,
+    amplitude: float,
+) -> np.ndarray:
+    """Quadratic monomial kernel k(x,x') = eta^2 (1 + x x' + x^2 x'^2)."""
+    return polynomial_kernel(
+        x1, x2, degree=2, length_scale=length_scale, amplitude=amplitude
+    )
+
+
+def poly4_kernel(
+    x1: np.ndarray,
+    x2: np.ndarray,
+    *,
+    length_scale: float,
+    amplitude: float,
+) -> np.ndarray:
+    """Quartic monomial kernel through z^4."""
+    return polynomial_kernel(
+        x1, x2, degree=4, length_scale=length_scale, amplitude=amplitude
+    )
+
+
 def stationary_kernel(
     kernel: GpKernelKind | str,
     x1: np.ndarray,
@@ -49,6 +116,11 @@ def stationary_kernel(
     amplitude: float,
 ) -> np.ndarray:
     kind = normalize_gp_kernel(kernel) if isinstance(kernel, str) else kernel
+    degree = polynomial_kernel_degree(kind)
+    if degree is not None:
+        return polynomial_kernel(
+            x1, x2, degree=degree, length_scale=length_scale, amplitude=amplitude
+        )
     fn = gaussian_kernel if kind == "gaussian" else matern52_kernel
     return fn(x1, x2, length_scale=length_scale, amplitude=amplitude)
 
@@ -144,11 +216,14 @@ def discrepancy_gp_log_marginal_likelihood(
     disc_gp_ell: float,
     disc_gp_eta: float,
     kernel: GpKernelKind | str = DEFAULT_GP_KERNEL,
+    universal_kernel: GpKernelKind | str | None = None,
     jitter: float = 1e-5,
+    coupling: DiscCoupling | str = "additive",
 ) -> float:
-    """Log marginal likelihood for y = f(z) + a * g(z) + noise.
+    """Log marginal likelihood for y = w_f f + w_g g + noise.
 
-    ``a`` is the collapsed-space amplitude (see ``gp_jax`` docstring).
+    ``a`` is the collapsed-space amplitude (additive) or unit gate ``π``
+    (mixture / weighted).  See ``gp_jax`` docstring.
     """
     z = np.asarray(z, dtype=np.float64).ravel()
     y = np.asarray(y, dtype=np.float64).ravel()
@@ -158,13 +233,15 @@ def discrepancy_gp_log_marginal_likelihood(
     if n == 0:
         return -np.inf
 
-    k0 = stationary_kernel(
-        kernel, z, z, length_scale=gp_ell, amplitude=gp_eta
-    )
-    kg = stationary_kernel(
-        kernel, z, z, length_scale=disc_gp_ell, amplitude=disc_gp_eta
-    )
-    k = k0 + a[:, None] * kg * a[None, :]
+    w_f, w_g = _discrepancy_weights(a, coupling)
+    uk = kernel if universal_kernel is None else universal_kernel
+    k0 = stationary_kernel(uk, z, z, length_scale=gp_ell, amplitude=gp_eta)
+    k = w_f[:, None] * k0 * w_f[None, :]
+    if coupling != "weighted":
+        kg = stationary_kernel(
+            kernel, z, z, length_scale=disc_gp_ell, amplitude=disc_gp_eta
+        )
+        k = k + w_g[:, None] * kg * w_g[None, :]
     k[np.diag_indices(n)] += sigma**2 + jitter
 
     chol = np.linalg.cholesky(k)
