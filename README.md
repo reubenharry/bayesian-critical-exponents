@@ -81,11 +81,7 @@ t_i &= \frac{T_i - T_c}{T_c},
   z_i = t_i L_i^{1/\nu} \\
 % a_i &= L_i^{-\omega} + \kappa\, |t_i|^{\omega\nu} \\
 % \pi_i &= \frac{a_i}{1+a_i} \\[0.5em]
-\varepsilon^{(c)}_i &\sim \mathcal{N}\bigl(0,\, \sigma_{\Phi_c,i}^2\bigr).
-\Phi^{(c)}_i = f^{(c)}(z_i) + \varepsilon^{(c)}_i, \\
+\varepsilon^{(c)}_i &\sim \mathcal{N}\bigl(0,\, \sigma_{\Phi_c,i}^2\bigr) \\
+\Phi^{(c)}_i = f^{(c)}(z_i) + \varepsilon^{(c)}_i
 \end{aligned}
 $$
-
-Here $\Phi^{(c)}_i$ is the collapsed observable
-($\Phi_m = m L^{\beta/\nu}$, $\Phi_{m^2} = m^2 L^{2\beta/\nu}$, $\Phi_{m^4} = m^4 L^{4\beta/\nu}$)
-and $\sigma_{\Phi_c,i}$ is the corresponding MC error.
