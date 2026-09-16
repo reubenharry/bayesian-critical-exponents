@@ -183,9 +183,14 @@ def plot_uncertainty_evolution(metrics: pd.DataFrame, path: Path) -> None:
     plt.close(fig)
 
 
-def _shared_xlim(samples_by_iter: list[np.ndarray], *, pad_frac: float = 0.08) -> tuple[float, float]:
+def _shared_xlim(
+    samples_by_iter: list[np.ndarray],
+    *,
+    pad_frac: float = 0.08,
+    percentiles: tuple[float, float] = (0.5, 99.5),
+) -> tuple[float, float]:
     pooled = np.concatenate(samples_by_iter)
-    lo, hi = np.percentile(pooled, [0.5, 99.5])
+    lo, hi = np.percentile(pooled, list(percentiles))
     span = max(float(hi - lo), 1e-6)
     pad = span * pad_frac
     return float(lo - pad), float(hi + pad)

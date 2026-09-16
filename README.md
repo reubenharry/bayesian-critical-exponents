@@ -64,49 +64,31 @@ The idea is that a point $m(L,t)$ is either dominated by the universal scaling f
 As $t\to 0$ and $L\to\infty$, $a\to 0$ so $\pi\to 0$ and $\Phi = f + \varepsilon$. When $a$ is large (small $L$ and/or large $|z|$), $\pi\to 1$ and the point is explained by $g$ instead of $f$: out-of-window observations do not pertub the universal scaling function we infer. When $\kappa=0$, $a$ reduces to pure $L^{-\omega}$ gating, $\pi = \frac{L^{-\omega}}{1+L^{-\omega}}$.
 
 
-## Generative model recap
-
-Conditional on the latents and $\psi$, channels are independent and Gaussian:
+## Generative model
 
 $$
-p\bigl(D \bigm| \{f^{(c)},g^{(c)}\}_c,\, \psi\bigr)
-  = \prod_{c\in\{m,m^2,m^4\}}
-    \prod_{i=1}^{n}
-    \mathcal{N}\bigl(
-      \Phi^{(c)}_i \;\big|\;
-      (1-\pi_i)\, f^{(c)}(z_i) + \pi_i\, g^{(c)}(z_i),\;
-      \sigma_{\Phi_c,i}^2
-    \bigr).
+\begin{aligned}
+T_c &\sim \mathrm{Uniform}(2.0,\, 2.5) \\
+\nu &\sim \mathrm{Uniform}(0.5,\, 1.5) \\
+\beta &\sim \mathrm{Uniform}(0.05,\, 0.25) \\
+\omega &\sim \mathrm{Uniform}(1,\, 10) \\
+\kappa &\sim \mathrm{Uniform}(0,\, 20) \\[0.5em]
+f^{(c)} &\sim \mathrm{GP}\bigl(0,\, k_{\ell_f,\eta_f}\bigr) \\
+g^{(c)} &\sim \mathrm{GP}\bigl(0,\, k_{\ell_g,\sigma_g}\bigr)
+  \qquad c\in\{m,m^2,m^4\} \\[0.5em]
+t_i &= \frac{T_i - T_c}{T_c},
+  \qquad
+  z_i = t_i L_i^{1/\nu} \\
+a_i &= L_i^{-\omega} + \kappa\, |t_i|^{\omega\nu} \\
+\pi_i &= \frac{a_i}{1+a_i} \\[0.5em]
+\Phi^{(c)}_i
+  &= (1-\pi_i)\, f^{(c)}(z_i)
+    + \pi_i\, g^{(c)}(z_i)
+    + \varepsilon^{(c)}_i, \\
+\varepsilon^{(c)}_i &\sim \mathcal{N}\bigl(0,\, \sigma_{\Phi_c,i}^2\bigr).
+\end{aligned}
 $$
 
-Integrating out $(f^{(c)},g^{(c)})$ analytically gives the marginal likelihood used for inference:
-
-$$
-p(D\mid\psi)
-  = \prod_{c\in\{m,m^2,m^4\}}
-    \mathcal{N}\bigl(\Phi^{(c)} \;\big|\; 0,\, K^{(c)}(\psi)\bigr),
-$$
-
-with channel covariances
-
-$$
-K^{(c)}_{ij}(\psi)
-  = (1-\pi_i)(1-\pi_j)\, k_{\ell_f,\eta_f}(z_i,z_j)
-    + \pi_i\pi_j\, k_{\ell_g,\sigma_g}(z_i,z_j)
-    + \sigma_{\Phi_c,i}^2\, \delta_{ij},
-$$
-
-where $\pi_i = \pi(t_i,L_i)$. Writing this out,
-
-$$
-\log p(D\mid\psi)
-  = \sum_{c\in\{m,m^2,m^4\}}
-    \Biggl[
-      -\tfrac12\, {\Phi^{(c)}}^\top \bigl(K^{(c)}\bigr)^{-1} \Phi^{(c)}
-      -\tfrac12\log\det K^{(c)}
-      -\tfrac{n}{2}\log(2\pi)
-    \Biggr].
-$$
-
-(If a channel is disabled, omit its term.)
-
+Here $\Phi^{(c)}_i$ is the collapsed observable
+($\Phi_m = m L^{\beta/\nu}$, $\Phi_{m^2} = m^2 L^{2\beta/\nu}$, $\Phi_{m^4} = m^4 L^{4\beta/\nu}$)
+and $\sigma_{\Phi_c,i}$ is the corresponding MC error.

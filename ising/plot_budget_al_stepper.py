@@ -932,11 +932,18 @@ def build_budget_stepper_frames(
     n_bins: int = 40,
     max_prior_draws: int = 500,
     max_frames: int | None = None,
+    heatmap_percentiles: tuple[float, float] = (0.5, 99.5),
+    heatmap_pad_frac: float = 0.08,
+    heatmap_posterior_only_limits: bool = False,
 ) -> tuple[pd.DataFrame, list[BudgetStepperFrame], tuple[float, float], tuple[float, float]]:
     """Load budget-AL artifacts into animation frames (partial runs supported).
 
     If ``max_frames`` is set, only the earliest that many iterations are loaded
     (useful for GIF exports of the first ~100 steps).
+
+    ``heatmap_percentiles`` / ``heatmap_pad_frac`` control the shared ``(T_c, ν)``
+    axis window. Set ``heatmap_posterior_only_limits=True`` to ignore prior-only
+    iterations when choosing that window (tighter zoom for GIFs).
     """
     meta = _load_run_meta(run_dir)
     chunk_size = int(meta.get("chunk_size", 10_000))
@@ -956,6 +963,8 @@ def build_budget_stepper_frames(
     # Shared heatmap grid from all available posteriors (+ prior draws for empty iters).
     tc_all: list[np.ndarray] = []
     nu_all: list[np.ndarray] = []
+    tc_post: list[np.ndarray] = []
+    nu_post: list[np.ndarray] = []
     samples_by_iter: dict[int, tuple[np.ndarray, np.ndarray, bool]] = {}
     for iteration in summary["iteration"].astype(int).tolist():
         tc, nu, has_post = _load_tc_nu_for_iteration(
@@ -967,9 +976,18 @@ def build_budget_stepper_frames(
         samples_by_iter[int(iteration)] = (tc, nu, has_post)
         tc_all.append(tc)
         nu_all.append(nu)
+        if has_post:
+            tc_post.append(tc)
+            nu_post.append(nu)
 
-    tc_lim = _shared_xlim(tc_all)
-    nu_lim = _shared_xlim(nu_all)
+    tc_for_lim = tc_post if (heatmap_posterior_only_limits and tc_post) else tc_all
+    nu_for_lim = nu_post if (heatmap_posterior_only_limits and nu_post) else nu_all
+    tc_lim = _shared_xlim(
+        tc_for_lim, pad_frac=heatmap_pad_frac, percentiles=heatmap_percentiles
+    )
+    nu_lim = _shared_xlim(
+        nu_for_lim, pad_frac=heatmap_pad_frac, percentiles=heatmap_percentiles
+    )
     tc_edges = np.linspace(tc_lim[0], tc_lim[1], n_bins + 1)
     nu_edges = np.linspace(nu_lim[0], nu_lim[1], n_bins + 1)
     tc_centers = 0.5 * (tc_edges[:-1] + tc_edges[1:])
@@ -1910,8 +1928,6 @@ def _draw_budget_stepper_gif_frame(
     run_dir: Path,
 ) -> None:
     """Render heatmap + Binder grid + Binder GP into the three matplotlib axes."""
-    import matplotlib.pyplot as plt
-
     ax_heat, ax_bind, ax_gp = axes
     for ax in axes:
         ax.clear()
@@ -2073,8 +2089,7 @@ def _draw_budget_stepper_gif_frame(
     meta = _load_run_meta(run_dir)
     selection = str(meta.get("selection", "budget-AL"))
     post_tag = "LAPS" if frame.has_posterior else "prior"
-    fig = ax_heat.figure
-    fig.suptitle(
+    ax_heat.figure.suptitle(
         (
             f"iter {frame.iteration:02d} ({selection}, {post_tag}): "
             f"{frame.n_points} pts / {frame.total_draws} draws, "
@@ -2083,22 +2098,22 @@ def _draw_budget_stepper_gif_frame(
         ),
         fontsize=11,
     )
-    _ = plt  # keep import used for type checkers / side effects
 
 
 def export_budget_stepper_gif(
     run_dir: Path,
     out_path: Path | None = None,
     *,
-    max_frames: int = 100,
-    n_bins: int = 40,
-    fps: int = 4,
-    dpi: int = 110,
+    max_frames: int = 50,
+    n_bins: int = 120,
+    fps: int = 10,
+    dpi: int = 130,
 ) -> Path:
     """Write a GIF of the first ``max_frames`` budget-AL steps.
 
     Each frame shows the joint ``(T_c, ν)`` heatmap, Binder grid, and Binder GP
     panel (the three views from the interactive stepper, omitting τ_int).
+    Default ``n_bins=120`` gives a finer heatmap than the interactive stepper.
     """
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation, PillowWriter
@@ -2120,6 +2135,10 @@ def export_budget_stepper_gif(
         run_dir,
         n_bins=n_bins,
         max_frames=max_frames,
+        # Zoom onto the posterior mass so 120 bins resolve the blob, not empty prior tails.
+        heatmap_percentiles=(5.0, 95.0),
+        heatmap_pad_frac=0.25,
+        heatmap_posterior_only_limits=True,
     )
     if not frames:
         raise ValueError(f"No frames available under {run_dir}")
@@ -2255,6 +2274,23 @@ def export_budget_stepper_notebook(run_dir: Path, out_path: Path | None = None) 
                     "show_stepper_in_notebook(fig)\n",
                 ],
             },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "from ising.plot_budget_al_stepper import export_budget_stepper_gif\n",
+                    "\n",
+                    "gif_path = export_budget_stepper_gif(\n",
+                    "    RUN_DIR,\n",
+                    "    max_frames=50,\n",
+                    "    n_bins=120,\n",
+                    "    fps=10,\n",
+                    ")\n",
+                    "print(gif_path)\n",
+                ],
+            },
         ],
         "metadata": {
             "kernelspec": {
@@ -2324,14 +2360,14 @@ def main(argv: list[str] | None = None) -> Path:
     parser.add_argument(
         "--gif-frames",
         type=int,
-        default=100,
-        help="Number of early iterations to include in the GIF (default: 100)",
+        default=50,
+        help="Number of early iterations to include in the GIF (default: 50)",
     )
     parser.add_argument(
         "--gif-fps",
         type=int,
-        default=4,
-        help="GIF frames per second (default: 4)",
+        default=10,
+        help="GIF frames per second (default: 10)",
     )
     args = parser.parse_args(argv)
     if args.backfill_neff:
