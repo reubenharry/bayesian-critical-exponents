@@ -931,8 +931,13 @@ def build_budget_stepper_frames(
     *,
     n_bins: int = 40,
     max_prior_draws: int = 500,
+    max_frames: int | None = None,
 ) -> tuple[pd.DataFrame, list[BudgetStepperFrame], tuple[float, float], tuple[float, float]]:
-    """Load budget-AL artifacts into animation frames (partial runs supported)."""
+    """Load budget-AL artifacts into animation frames (partial runs supported).
+
+    If ``max_frames`` is set, only the earliest that many iterations are loaded
+    (useful for GIF exports of the first ~100 steps).
+    """
     meta = _load_run_meta(run_dir)
     chunk_size = int(meta.get("chunk_size", 10_000))
     n_chunks_max = int(meta.get("n_chunks_max", 8))
@@ -944,6 +949,9 @@ def build_budget_stepper_frames(
     summary = load_budget_summary(run_dir, chunk_size=chunk_size, n_points=n_points)
     if summary.empty:
         raise ValueError(f"No complete iterations to display under {run_dir}")
+    summary = summary.sort_values("iteration").reset_index(drop=True)
+    if max_frames is not None:
+        summary = summary.head(int(max_frames)).reset_index(drop=True)
 
     # Shared heatmap grid from all available posteriors (+ prior draws for empty iters).
     tc_all: list[np.ndarray] = []
@@ -1879,6 +1887,283 @@ if (gd) {{
 """
 
 
+def _mpl_binder_style(L: int) -> dict[str, object]:
+    style = _BINDER_STYLE.get(
+        int(L),
+        {"color": "black", "symbol": "circle", "size_base": 7, "label": f"L={L}"},
+    )
+    return dict(style)
+
+
+def _draw_budget_stepper_gif_frame(
+    axes: tuple[object, object, object],
+    full_df: pd.DataFrame,
+    frame: BudgetStepperFrame,
+    *,
+    tc_lim: tuple[float, float],
+    nu_lim: tuple[float, float],
+    chunk_size: int,
+    n_chunks_max: int,
+    z_max: float,
+    u4_lim: tuple[float, float],
+    T_lim: tuple[float, float],
+    run_dir: Path,
+) -> None:
+    """Render heatmap + Binder grid + Binder GP into the three matplotlib axes."""
+    import matplotlib.pyplot as plt
+
+    ax_heat, ax_bind, ax_gp = axes
+    for ax in axes:
+        ax.clear()
+
+    # --- Heatmap (T_c, ν) ---
+    extent = [tc_lim[0], tc_lim[1], nu_lim[0], nu_lim[1]]
+    ax_heat.imshow(
+        frame.z,
+        origin="lower",
+        aspect="auto",
+        extent=extent,
+        cmap="Blues",
+        interpolation="nearest",
+        vmin=0.0,
+        vmax=z_max,
+    )
+    ax_heat.plot(TC_EXACT, NU_EXACT, marker="*", color="black", markersize=11, linestyle="none")
+    ax_heat.plot(
+        frame.mean_tc,
+        frame.mean_nu,
+        marker="x",
+        color="#c44e52",
+        markersize=9,
+        linestyle="none",
+    )
+    dens = "posterior" if frame.has_posterior else "prior"
+    ax_heat.set_title(f"(T_c, ν) {dens}")
+    ax_heat.set_xlabel(r"$T_c$")
+    ax_heat.set_ylabel(r"$\nu$")
+    ax_heat.set_xlim(*tc_lim)
+    ax_heat.set_ylim(*nu_lim)
+
+    # --- Binder grid ---
+    L_arr = full_df["L"].to_numpy(dtype=np.int64)
+    T_arr = full_df["T"].to_numpy(dtype=np.float64)
+    u4 = full_df["binder_cumulant"].to_numpy(dtype=np.float64)
+    n_draws = frame.n_draws
+    sizes = _marker_size(n_draws, chunk_size=chunk_size, n_chunks_max=n_chunks_max)
+    max_draws = chunk_size * n_chunks_max
+
+    for L in sorted(full_df["L"].unique()):
+        style = _mpl_binder_style(int(L))
+        active = (n_draws > 0) & (L_arr == int(L))
+        if not active.any():
+            continue
+        ax_bind.scatter(
+            T_arr[active],
+            u4[active],
+            s=(sizes[active] ** 2) * 0.35,
+            c=style["color"],
+            edgecolors="white",
+            linewidths=0.6,
+            alpha=0.9,
+            label=str(style["label"]),
+            zorder=2,
+        )
+
+    if not frame.ranking.empty:
+        cand_idx = frame.ranking["row_index"].astype(int).to_numpy()
+        cand_idx = cand_idx[n_draws[cand_idx] < max_draws]
+        if cand_idx.size:
+            ax_bind.scatter(
+                T_arr[cand_idx],
+                u4[cand_idx],
+                s=(sizes[cand_idx] ** 2) * 0.35,
+                c=_CANDIDATE_FLAT_COLOR,
+                edgecolors="white",
+                linewidths=0.4,
+                alpha=0.45,
+                label="candidates",
+                zorder=1,
+            )
+
+    next_row = full_df.iloc[frame.next_index]
+    ax_bind.scatter(
+        [float(next_row["T"])],
+        [float(next_row["binder_cumulant"])],
+        s=220,
+        marker="*",
+        c="#e6a817",
+        edgecolors="black",
+        linewidths=0.8,
+        label="chosen +10k",
+        zorder=3,
+    )
+    ax_bind.axvline(TC_EXACT, color="red", ls="-.", lw=1.0, alpha=0.8)
+    ax_bind.set_title("Binder grid")
+    ax_bind.set_xlabel(r"$T$")
+    ax_bind.set_ylabel(r"$U_4$")
+    ax_bind.set_xlim(*T_lim)
+    ax_bind.set_ylim(*u4_lim)
+    ax_bind.legend(loc="best", fontsize=7, frameon=False)
+
+    # --- Binder GP ---
+    panel = frame.binder_gp_panel
+    for L in panel.L_values:
+        style = _neff_style(int(L))
+        color = str(style["color"])
+        mask = np.isclose(panel.L, float(L)) if panel.L.size else np.array([], dtype=bool)
+        if mask.size and mask.any():
+            ax_gp.scatter(
+                panel.T[mask],
+                panel.U[mask],
+                s=28,
+                c=color,
+                edgecolors="white",
+                linewidths=0.5,
+                zorder=3,
+                label=f"budget L={int(L)}",
+            )
+        T_curve = panel.curve_T.get(int(L))
+        u_c = panel.curve_U.get(int(L))
+        u_std = panel.curve_U_std.get(int(L))
+        if (
+            T_curve is not None
+            and u_c is not None
+            and u_std is not None
+            and T_curve.size
+            and u_c.size == T_curve.size
+            and u_std.size == T_curve.size
+        ):
+            ax_gp.fill_between(
+                T_curve,
+                u_c - u_std,
+                u_c + u_std,
+                color=color,
+                alpha=0.2,
+                linewidth=0,
+                zorder=1,
+            )
+            ax_gp.plot(T_curve, u_c, color=color, lw=1.8, zorder=2, label=rf"$\hat U$ L={int(L)}")
+        T_ex = panel.exact_curve_T.get(int(L))
+        U_ex = panel.exact_curve_U.get(int(L))
+        if T_ex is not None and U_ex is not None and T_ex.size and U_ex.size == T_ex.size:
+            ax_gp.plot(
+                T_ex,
+                U_ex,
+                color=color,
+                lw=1.4,
+                ls="--",
+                alpha=0.85,
+                zorder=2,
+                label=f"exact L={int(L)}",
+            )
+
+    tc = float(frame.mean_tc)
+    tc_std = float(frame.tc_std)
+    if np.isfinite(tc_std) and tc_std > 0.0:
+        ax_gp.axvspan(tc - tc_std, tc + tc_std, color="0.55", alpha=0.18, zorder=0)
+    ax_gp.axvline(tc, color="0.25", ls=":", lw=1.4, zorder=1, label=r"$\langle T_c\rangle\pm1\sigma$")
+    ax_gp.axvline(TC_EXACT, color="red", ls="-.", lw=1.0, alpha=0.8)
+    ax_gp.set_title(r"Binder GP $\hat U_4(T)$ (budgeted pts)")
+    ax_gp.set_xlabel(r"$T$")
+    ax_gp.set_ylabel(r"$U_4$")
+    ax_gp.set_xlim(*T_lim)
+    ax_gp.set_ylim(*u4_lim)
+    ax_gp.legend(loc="best", fontsize=7, ncol=2, frameon=False)
+
+    meta = _load_run_meta(run_dir)
+    selection = str(meta.get("selection", "budget-AL"))
+    post_tag = "LAPS" if frame.has_posterior else "prior"
+    fig = ax_heat.figure
+    fig.suptitle(
+        (
+            f"iter {frame.iteration:02d} ({selection}, {post_tag}): "
+            f"{frame.n_points} pts / {frame.total_draws} draws, "
+            f"next idx={frame.next_index}, Δtr(cov)={frame.next_delta_tr_cov:.4g}, "
+            f"tr(cov)={frame.tr_cov:.4g}"
+        ),
+        fontsize=11,
+    )
+    _ = plt  # keep import used for type checkers / side effects
+
+
+def export_budget_stepper_gif(
+    run_dir: Path,
+    out_path: Path | None = None,
+    *,
+    max_frames: int = 100,
+    n_bins: int = 40,
+    fps: int = 4,
+    dpi: int = 110,
+) -> Path:
+    """Write a GIF of the first ``max_frames`` budget-AL steps.
+
+    Each frame shows the joint ``(T_c, ν)`` heatmap, Binder grid, and Binder GP
+    panel (the three views from the interactive stepper, omitting τ_int).
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.animation import FuncAnimation, PillowWriter
+
+    run_dir = Path(run_dir)
+    if out_path is None:
+        out_path = run_dir / f"evolution_stepper_first{int(max_frames)}.gif"
+    out_path = Path(out_path)
+
+    meta = _load_run_meta(run_dir)
+    chunk_size = int(meta.get("chunk_size", 10_000))
+    n_chunks_max = int(meta.get("n_chunks_max", 8))
+
+    print(
+        f"Building up to {max_frames} stepper frames from {run_dir} …",
+        flush=True,
+    )
+    full_df, frames, tc_lim, nu_lim = build_budget_stepper_frames(
+        run_dir,
+        n_bins=n_bins,
+        max_frames=max_frames,
+    )
+    if not frames:
+        raise ValueError(f"No frames available under {run_dir}")
+    print(f"Rendering GIF with {len(frames)} frames → {out_path}", flush=True)
+
+    z_max = max(float(fr.z.max()) for fr in frames) if frames else 1.0
+    z_max = max(z_max, 1e-12)
+    T_arr = full_df["T"].to_numpy(dtype=np.float64)
+    u4 = full_df["binder_cumulant"].to_numpy(dtype=np.float64)
+    T_pad = 0.02 * (float(T_arr.max()) - float(T_arr.min()) + 1e-9)
+    u_pad = 0.05 * (float(u4.max()) - float(u4.min()) + 1e-9)
+    T_lim = (float(T_arr.min()) - T_pad, float(T_arr.max()) + T_pad)
+    u4_lim = (float(u4.min()) - u_pad, float(u4.max()) + u_pad)
+
+    fig = plt.figure(figsize=(11.5, 8.2), constrained_layout=True)
+    gs = fig.add_gridspec(2, 2, height_ratios=[1.05, 1.0])
+    ax_heat = fig.add_subplot(gs[0, 0])
+    ax_bind = fig.add_subplot(gs[0, 1])
+    ax_gp = fig.add_subplot(gs[1, :])
+    axes = (ax_heat, ax_bind, ax_gp)
+
+    def _update(i: int) -> tuple[object, ...]:
+        _draw_budget_stepper_gif_frame(
+            axes,
+            full_df,
+            frames[i],
+            tc_lim=tc_lim,
+            nu_lim=nu_lim,
+            chunk_size=chunk_size,
+            n_chunks_max=n_chunks_max,
+            z_max=z_max,
+            u4_lim=u4_lim,
+            T_lim=T_lim,
+            run_dir=run_dir,
+        )
+        return axes
+
+    anim = FuncAnimation(fig, _update, frames=len(frames), blit=False)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    anim.save(out_path, writer=PillowWriter(fps=fps), dpi=dpi)
+    plt.close(fig)
+    return out_path
+
+
 def export_budget_stepper_html(
     run_dir: Path,
     out_path: Path,
@@ -2024,6 +2309,30 @@ def main(argv: list[str] | None = None) -> Path:
             "(needed once for runs started before this artifact existed)"
         ),
     )
+    parser.add_argument(
+        "--gif",
+        type=Path,
+        default=None,
+        nargs="?",
+        const=True,
+        metavar="PATH",
+        help=(
+            "Also write a GIF of the first --gif-frames steps "
+            "(default: RUN_DIR/evolution_stepper_firstN.gif)"
+        ),
+    )
+    parser.add_argument(
+        "--gif-frames",
+        type=int,
+        default=100,
+        help="Number of early iterations to include in the GIF (default: 100)",
+    )
+    parser.add_argument(
+        "--gif-fps",
+        type=int,
+        default=4,
+        help="GIF frames per second (default: 4)",
+    )
     args = parser.parse_args(argv)
     if args.backfill_neff:
         n_written = backfill_neff_train_csvs(args.run_dir)
@@ -2044,6 +2353,20 @@ def main(argv: list[str] | None = None) -> Path:
         )
         nb_path = export_budget_stepper_notebook(args.run_dir, nb_out)
         print(f"Wrote notebook {nb_path}", flush=True)
+    if args.gif is not None:
+        gif_out = (
+            None
+            if args.gif is True
+            else Path(args.gif)
+        )
+        gif_path = export_budget_stepper_gif(
+            args.run_dir,
+            gif_out,
+            max_frames=args.gif_frames,
+            n_bins=args.bins,
+            fps=args.gif_fps,
+        )
+        print(f"Wrote GIF {gif_path}", flush=True)
     return path
 
 

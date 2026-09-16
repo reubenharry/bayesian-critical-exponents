@@ -64,14 +64,49 @@ The idea is that a point $m(L,t)$ is either dominated by the universal scaling f
 As $t\to 0$ and $L\to\infty$, $a\to 0$ so $\pi\to 0$ and $\Phi = f + \varepsilon$. When $a$ is large (small $L$ and/or large $|z|$), $\pi\to 1$ and the point is explained by $g$ instead of $f$: out-of-window observations do not pertub the universal scaling function we infer. When $\kappa=0$, $a$ reduces to pure $L^{-\omega}$ gating, $\pi = \frac{L^{-\omega}}{1+L^{-\omega}}$.
 
 
-<!-- Conditional on the latents and $\psi$, channels are independent and Gaussian: $p(D \bigm| \{f^{(c)},g^{(c)}\}_c,\, \psi) = \prod_{c\in\{m,m^2,m^4\}} \prod_{i=1}^{n} \mathcal{N}\!\bigl(\Phi^{(c)}_i \;\big|\; (1-\pi_i)\, f^{(c)}(z_i) + \pi_i\, g^{(c)}(z_i),\; \sigma_{\Phi_c,i}^2\bigr)$.
-Integrating out $(f^{(c)},g^{(c)})$ analytically gives the marginal
-likelihood used for inference:
-$p(D\mid\psi) = \prod_{c\in\{m,m^2,m^4\}} \mathcal{N}\!\bigl(\Phi^{(c)} \;\big|\; 0,\, K^{(c)}(\psi)\bigr)$.
-with channel covariances $K^{(c)}_{ij}(\psi) = (1-\pi_i)(1-\pi_j)\, k_{\ell_f,\eta_f}(z_i,z_j) + \pi_i\pi_j\, k_{\ell_g,\sigma_g}(z_i,z_j) + \sigma_{\Phi_c,i}^2\, \delta_{ij}$.
-where $\pi_i = \pi(t_i,L_i)$ from~\eqref{eq:pi-gate}.
-Writing this out, $\log p(D\mid\psi) = \sum_{c\in\{m,m^2,m^4\}} \Biggl[ -\tfrac12\, {\Phi^{(c)}}^\top \bigl(K^{(c)}\bigr)^{-1} \Phi^{(c)} -\tfrac12\log\det K^{(c)} -\tfrac{n}{2}\log(2\pi) \Biggr]$.
-(If a channel is disabled, omit its term.) -->
+## Generative model recap
 
+Conditional on the latents and $\psi$, channels are independent and Gaussian:
 
+$$
+p\bigl(D \bigm| \{f^{(c)},g^{(c)}\}_c,\, \psi\bigr)
+  = \prod_{c\in\{m,m^2,m^4\}}
+    \prod_{i=1}^{n}
+    \mathcal{N}\!\bigl(
+      \Phi^{(c)}_i \;\big|\;
+      (1-\pi_i)\, f^{(c)}(z_i) + \pi_i\, g^{(c)}(z_i),\;
+      \sigma_{\Phi_c,i}^2
+    \bigr).
+$$
+
+Integrating out $(f^{(c)},g^{(c)})$ analytically gives the marginal likelihood used for inference:
+
+$$
+p(D\mid\psi)
+  = \prod_{c\in\{m,m^2,m^4\}}
+    \mathcal{N}\!\bigl(\Phi^{(c)} \;\big|\; 0,\, K^{(c)}(\psi)\bigr),
+$$
+
+with channel covariances
+
+$$
+K^{(c)}_{ij}(\psi)
+  = (1-\pi_i)(1-\pi_j)\, k_{\ell_f,\eta_f}(z_i,z_j)
+    + \pi_i\pi_j\, k_{\ell_g,\sigma_g}(z_i,z_j)
+    + \sigma_{\Phi_c,i}^2\, \delta_{ij},
+$$
+
+where $\pi_i = \pi(t_i,L_i)$. Writing this out,
+
+$$
+\log p(D\mid\psi)
+  = \sum_{c\in\{m,m^2,m^4\}}
+    \Biggl[
+      -\tfrac12\, {\Phi^{(c)}}^\top \bigl(K^{(c)}\bigr)^{-1} \Phi^{(c)}
+      -\tfrac12\log\det K^{(c)}
+      -\tfrac{n}{2}\log(2\pi)
+    \Biggr].
+$$
+
+(If a channel is disabled, omit its term.)
 
