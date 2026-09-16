@@ -33,7 +33,7 @@ Without data, we have no reason to think that the critical parameters are correl
 
 We can be more specific about the priors on the critical parameters. For instance, let's $p(T_c) = \mathrm{Uniform}(2.0,\, 2.5)$, $p(\nu) = \mathrm{Uniform}(0.5,\, 1.5)$, $p(\beta) = \mathrm{Uniform}(0.05,\, 0.25)$.
 
-The prior we choose for the scaling function itself is a Gaussian process prior: $p(f_c) = \mathrm{GP}(0,\, k_{\ell_f,\eta_f})$, where $k_{\ell_f,\eta_f}(z,z') = \eta_f^2 \exp\!\Bigl(-\frac{(z-z')^2}{2\ell_f^2}\Bigr)$.
+The prior we choose for the scaling function itself is a Gaussian process prior: $p(f_c) = \mathrm{GP}(0,\, k_{\ell_f,\eta_f})$, where $k_{\ell_f,\eta_f}(z,z') = \eta_f^2 \exp\Bigl(-\frac{(z-z')^2}{2\ell_f^2}\Bigr)$.
 
 Since we are Bayesian, all other model parameters, like the length scale of the Gaussian process should be put in the prior, but let's leave this for now, for simplicity.
 
@@ -72,7 +72,7 @@ $$
 p\bigl(D \bigm| \{f^{(c)},g^{(c)}\}_c,\, \psi\bigr)
   = \prod_{c\in\{m,m^2,m^4\}}
     \prod_{i=1}^{n}
-    \mathcal{N}\!\bigl(
+    \mathcal{N}\bigl(
       \Phi^{(c)}_i \;\big|\;
       (1-\pi_i)\, f^{(c)}(z_i) + \pi_i\, g^{(c)}(z_i),\;
       \sigma_{\Phi_c,i}^2
@@ -84,7 +84,7 @@ Integrating out $(f^{(c)},g^{(c)})$ analytically gives the marginal likelihood u
 $$
 p(D\mid\psi)
   = \prod_{c\in\{m,m^2,m^4\}}
-    \mathcal{N}\!\bigl(\Phi^{(c)} \;\big|\; 0,\, K^{(c)}(\psi)\bigr),
+    \mathcal{N}\bigl(\Phi^{(c)} \;\big|\; 0,\, K^{(c)}(\psi)\bigr),
 $$
 
 with channel covariances
