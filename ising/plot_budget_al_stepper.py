@@ -173,6 +173,9 @@ class BudgetStepperFrame:
     has_posterior: bool
     neff_panel: NeffPanelState
     binder_gp_panel: BinderGpPanelState
+    # Raw (T_c, ν) draws for prettier GIF heatmaps (KDE); empty for HTML-only paths.
+    tc_samples: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.float64))
+    nu_samples: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.float64))
 
 
 def _load_run_meta(run_dir: Path) -> dict:
@@ -1094,6 +1097,8 @@ def build_budget_stepper_frames(
                 has_posterior=has_post,
                 neff_panel=neff_panel,
                 binder_gp_panel=binder_gp_panel,
+                tc_samples=np.asarray(tc, dtype=np.float64),
+                nu_samples=np.asarray(nu, dtype=np.float64),
             )
         )
 
@@ -1941,6 +1946,46 @@ def _mpl_binder_style(L: int) -> dict[str, object]:
     return dict(style)
 
 
+def _kde_density_grid(
+    tc: np.ndarray,
+    nu: np.ndarray,
+    *,
+    tc_lim: tuple[float, float],
+    nu_lim: tuple[float, float],
+    n_grid: int = 160,
+    max_samples: int = 2500,
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Evaluate a 2D Gaussian KDE on a regular grid.
+
+    Returns ``(T_c mesh, ν mesh, density)`` with shape ``(n_grid, n_grid)``, or
+    ``None`` if there are too few samples / a singular covariance.
+    """
+    from scipy.stats import gaussian_kde
+
+    tc = np.asarray(tc, dtype=np.float64).ravel()
+    nu = np.asarray(nu, dtype=np.float64).ravel()
+    if tc.size < 8 or nu.size != tc.size:
+        return None
+    if tc.size > max_samples:
+        rng = np.random.default_rng(seed)
+        idx = rng.choice(tc.size, size=max_samples, replace=False)
+        tc = tc[idx]
+        nu = nu[idx]
+    try:
+        kde = gaussian_kde(np.vstack([tc, nu]))
+        # Slightly tighter than Scott's rule so late peaked posteriors stay crisp.
+        kde.set_bandwidth(float(kde.factor) * 0.75)
+    except Exception:
+        return None
+
+    tc_g = np.linspace(tc_lim[0], tc_lim[1], n_grid)
+    nu_g = np.linspace(nu_lim[0], nu_lim[1], n_grid)
+    TT, NN = np.meshgrid(tc_g, nu_g)
+    dens = kde(np.vstack([TT.ravel(), NN.ravel()])).reshape(TT.shape)
+    return TT, NN, dens
+
+
 def _draw_budget_stepper_gif_frame(
     axes: tuple[object, object, object],
     full_df: pd.DataFrame,
@@ -1955,48 +2000,98 @@ def _draw_budget_stepper_gif_frame(
     run_dir: Path,
 ) -> None:
     """Render heatmap + Binder grid + Binder GP into the three matplotlib axes."""
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+
     ax_heat, ax_bind, ax_gp = axes
     for ax in axes:
         ax.clear()
 
-    # --- Heatmap (T_c, ν) ---
-    # Per-frame √-scaled density so early diffuse posteriors keep visible mass
-    # (a shared vmax across the GIF washes them out against late peaked frames).
-    # Truncate Blues so low-density bins stay readable; keep exact zeros white.
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import LinearSegmentedColormap
-    from scipy.ndimage import gaussian_filter
-
-    extent = [tc_lim[0], tc_lim[1], nu_lim[0], nu_lim[1]]
-    z = np.asarray(frame.z, dtype=np.float64)
-    # Stronger blur when the histogram is sparse (early iterations).
-    n_hit = int(np.count_nonzero(z > 0))
-    sigma = 1.6 if n_hit < 0.08 * z.size else 0.9
-    z = gaussian_filter(z, sigma=sigma)
-    z_peak = float(np.max(z)) if z.size else 0.0
-    if z_peak > 0.0:
-        z_show = np.sqrt(np.clip(z / z_peak, 0.0, 1.0))
-    else:
-        z_show = z
+    # --- Heatmap (T_c, ν): faint draws + KDE contourf (histogram fallback) ---
     blues = plt.get_cmap("Blues")
     heat_cmap = LinearSegmentedColormap.from_list(
         "blues_hi",
-        blues(np.linspace(0.22, 1.0, 256)),
+        blues(np.linspace(0.18, 1.0, 256)),
     )
-    heat_cmap.set_bad("white")
-    z_masked = np.ma.masked_where(z_show <= 1e-3, z_show)
-    ax_heat.imshow(
-        z_masked,
-        origin="lower",
-        aspect="auto",
-        extent=extent,
-        cmap=heat_cmap,
-        interpolation="nearest",
-        vmin=0.0,
-        vmax=1.0,
+    tc_s = np.asarray(frame.tc_samples, dtype=np.float64).ravel()
+    nu_s = np.asarray(frame.nu_samples, dtype=np.float64).ravel()
+    kde_grid = _kde_density_grid(
+        tc_s,
+        nu_s,
+        tc_lim=tc_lim,
+        nu_lim=nu_lim,
+        n_grid=160,
+        seed=int(frame.iteration),
     )
+    if tc_s.size and nu_s.size == tc_s.size:
+        rng = np.random.default_rng(int(frame.iteration) + 17)
+        n_show = min(tc_s.size, 900)
+        idx = rng.choice(tc_s.size, size=n_show, replace=False)
+        ax_heat.scatter(
+            tc_s[idx],
+            nu_s[idx],
+            s=5,
+            c="#6b8cce",
+            alpha=0.14,
+            linewidths=0,
+            zorder=1,
+            rasterized=True,
+        )
+    if kde_grid is not None:
+        TT, NN, dens = kde_grid
+        peak = float(np.max(dens))
+        z_show = np.sqrt(np.clip(dens / max(peak, 1e-300), 0.0, 1.0))
+        levels = np.linspace(0.08, 1.0, 16)
+        ax_heat.contourf(
+            TT,
+            NN,
+            z_show,
+            levels=levels,
+            cmap=heat_cmap,
+            extend="max",
+            zorder=2,
+        )
+        ax_heat.contour(
+            TT,
+            NN,
+            z_show,
+            levels=levels[2::3],
+            colors="white",
+            linewidths=0.35,
+            alpha=0.45,
+            zorder=3,
+        )
+    else:
+        # Fallback: blurred √-scaled histogram if KDE cannot be built.
+        from scipy.ndimage import gaussian_filter
 
-    ax_heat.plot(TC_EXACT, NU_EXACT, marker="*", color="black", markersize=11, linestyle="none")
+        extent = [tc_lim[0], tc_lim[1], nu_lim[0], nu_lim[1]]
+        z = gaussian_filter(np.asarray(frame.z, dtype=np.float64), sigma=1.2)
+        peak = float(np.max(z)) if z.size else 0.0
+        z_show = np.sqrt(np.clip(z / max(peak, 1e-300), 0.0, 1.0)) if peak > 0 else z
+        heat_cmap.set_bad("white")
+        z_masked = np.ma.masked_where(z_show <= 1e-3, z_show)
+        ax_heat.imshow(
+            z_masked,
+            origin="lower",
+            aspect="auto",
+            extent=extent,
+            cmap=heat_cmap,
+            interpolation="bilinear",
+            vmin=0.0,
+            vmax=1.0,
+            zorder=2,
+        )
+
+    ax_heat.plot(
+        TC_EXACT,
+        NU_EXACT,
+        marker="*",
+        color="black",
+        markersize=11,
+        linestyle="none",
+        zorder=5,
+    )
     ax_heat.plot(
         frame.mean_tc,
         frame.mean_nu,
@@ -2004,9 +2099,10 @@ def _draw_budget_stepper_gif_frame(
         color="#c44e52",
         markersize=9,
         linestyle="none",
+        zorder=5,
     )
-    dens = "posterior" if frame.has_posterior else "prior"
-    ax_heat.set_title(f"(T_c, ν) {dens}")
+    dens_label = "posterior" if frame.has_posterior else "prior"
+    ax_heat.set_title(f"(T_c, ν) {dens_label}")
     ax_heat.set_xlabel(r"$T_c$")
     ax_heat.set_ylabel(r"$\nu$")
     ax_heat.set_xlim(*tc_lim)
