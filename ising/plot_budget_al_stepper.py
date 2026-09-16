@@ -982,11 +982,39 @@ def build_budget_stepper_frames(
 
     tc_for_lim = tc_post if (heatmap_posterior_only_limits and tc_post) else tc_all
     nu_for_lim = nu_post if (heatmap_posterior_only_limits and nu_post) else nu_all
-    tc_lim = _shared_xlim(
-        tc_for_lim, pad_frac=heatmap_pad_frac, percentiles=heatmap_percentiles
+    # For zoomed GIFs, average per-frame percentile windows from early posteriors.
+    # Pooling all early draws is too wide (outliers); late-only pooling collapses
+    # onto a tiny blob.
+    if heatmap_posterior_only_limits and len(tc_for_lim) > 1:
+        n_early = max(1, min(15, len(tc_for_lim)))
+        p_lo, p_hi = heatmap_percentiles
+        tc_los = [float(np.percentile(tc, p_lo)) for tc in tc_for_lim[:n_early]]
+        tc_his = [float(np.percentile(tc, p_hi)) for tc in tc_for_lim[:n_early]]
+        nu_los = [float(np.percentile(nu, p_lo)) for nu in nu_for_lim[:n_early]]
+        nu_his = [float(np.percentile(nu, p_hi)) for nu in nu_for_lim[:n_early]]
+        tc_lo, tc_hi = float(np.mean(tc_los)), float(np.mean(tc_his))
+        nu_lo, nu_hi = float(np.mean(nu_los)), float(np.mean(nu_his))
+        tc_pad = max(tc_hi - tc_lo, 1e-6) * heatmap_pad_frac
+        nu_pad = max(nu_hi - nu_lo, 1e-6) * heatmap_pad_frac
+        tc_lim = (tc_lo - tc_pad, tc_hi + tc_pad)
+        nu_lim = (nu_lo - nu_pad, nu_hi + nu_pad)
+    else:
+        tc_lim = _shared_xlim(
+            tc_for_lim, pad_frac=heatmap_pad_frac, percentiles=heatmap_percentiles
+        )
+        nu_lim = _shared_xlim(
+            nu_for_lim, pad_frac=heatmap_pad_frac, percentiles=heatmap_percentiles
+        )
+    # Always keep the exact (T_c, ν) marker inside the shared window.
+    tc_span = max(tc_lim[1] - tc_lim[0], 1e-6)
+    nu_span = max(nu_lim[1] - nu_lim[0], 1e-6)
+    tc_lim = (
+        min(tc_lim[0], float(TC_EXACT) - 0.12 * tc_span),
+        max(tc_lim[1], float(TC_EXACT) + 0.12 * tc_span),
     )
-    nu_lim = _shared_xlim(
-        nu_for_lim, pad_frac=heatmap_pad_frac, percentiles=heatmap_percentiles
+    nu_lim = (
+        min(nu_lim[0], float(NU_EXACT) - 0.12 * nu_span),
+        max(nu_lim[1], float(NU_EXACT) + 0.12 * nu_span),
     )
     tc_edges = np.linspace(tc_lim[0], tc_lim[1], n_bins + 1)
     nu_edges = np.linspace(nu_lim[0], nu_lim[1], n_bins + 1)
@@ -1922,7 +1950,6 @@ def _draw_budget_stepper_gif_frame(
     nu_lim: tuple[float, float],
     chunk_size: int,
     n_chunks_max: int,
-    z_max: float,
     u4_lim: tuple[float, float],
     T_lim: tuple[float, float],
     run_dir: Path,
@@ -1933,17 +1960,42 @@ def _draw_budget_stepper_gif_frame(
         ax.clear()
 
     # --- Heatmap (T_c, ν) ---
+    # Per-frame √-scaled density so early diffuse posteriors keep visible mass
+    # (a shared vmax across the GIF washes them out against late peaked frames).
+    # Truncate Blues so low-density bins stay readable; keep exact zeros white.
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+    from scipy.ndimage import gaussian_filter
+
     extent = [tc_lim[0], tc_lim[1], nu_lim[0], nu_lim[1]]
+    z = np.asarray(frame.z, dtype=np.float64)
+    # Stronger blur when the histogram is sparse (early iterations).
+    n_hit = int(np.count_nonzero(z > 0))
+    sigma = 1.6 if n_hit < 0.08 * z.size else 0.9
+    z = gaussian_filter(z, sigma=sigma)
+    z_peak = float(np.max(z)) if z.size else 0.0
+    if z_peak > 0.0:
+        z_show = np.sqrt(np.clip(z / z_peak, 0.0, 1.0))
+    else:
+        z_show = z
+    blues = plt.get_cmap("Blues")
+    heat_cmap = LinearSegmentedColormap.from_list(
+        "blues_hi",
+        blues(np.linspace(0.22, 1.0, 256)),
+    )
+    heat_cmap.set_bad("white")
+    z_masked = np.ma.masked_where(z_show <= 1e-3, z_show)
     ax_heat.imshow(
-        frame.z,
+        z_masked,
         origin="lower",
         aspect="auto",
         extent=extent,
-        cmap="Blues",
+        cmap=heat_cmap,
         interpolation="nearest",
         vmin=0.0,
-        vmax=z_max,
+        vmax=1.0,
     )
+
     ax_heat.plot(TC_EXACT, NU_EXACT, marker="*", color="black", markersize=11, linestyle="none")
     ax_heat.plot(
         frame.mean_tc,
@@ -2135,17 +2187,20 @@ def export_budget_stepper_gif(
         run_dir,
         n_bins=n_bins,
         max_frames=max_frames,
-        # Zoom onto the posterior mass so 120 bins resolve the blob, not empty prior tails.
-        heatmap_percentiles=(5.0, 95.0),
-        heatmap_pad_frac=0.25,
+        # Zoom onto the posterior mass so bins resolve the blob, not empty prior tails.
+        heatmap_percentiles=(15.0, 85.0),
+        heatmap_pad_frac=0.35,
         heatmap_posterior_only_limits=True,
     )
     if not frames:
         raise ValueError(f"No frames available under {run_dir}")
     print(f"Rendering GIF with {len(frames)} frames → {out_path}", flush=True)
+    print(
+        f"Heatmap window: T_c∈[{tc_lim[0]:.4f},{tc_lim[1]:.4f}], "
+        f"ν∈[{nu_lim[0]:.4f},{nu_lim[1]:.4f}]",
+        flush=True,
+    )
 
-    z_max = max(float(fr.z.max()) for fr in frames) if frames else 1.0
-    z_max = max(z_max, 1e-12)
     T_arr = full_df["T"].to_numpy(dtype=np.float64)
     u4 = full_df["binder_cumulant"].to_numpy(dtype=np.float64)
     T_pad = 0.02 * (float(T_arr.max()) - float(T_arr.min()) + 1e-9)
@@ -2169,7 +2224,6 @@ def export_budget_stepper_gif(
             nu_lim=nu_lim,
             chunk_size=chunk_size,
             n_chunks_max=n_chunks_max,
-            z_max=z_max,
             u4_lim=u4_lim,
             T_lim=T_lim,
             run_dir=run_dir,
