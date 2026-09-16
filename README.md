@@ -73,14 +73,15 @@ T_c \sim \mathrm{Uniform}(2.0,\, 2.5) \\
 \beta \sim \mathrm{Uniform}(0.05,\, 0.25) \\
 % \omega \sim \mathrm{Uniform}(1,\, 10) \\
 % \kappa \sim \mathrm{Uniform}(0,\, 20) \\[0.5em]
-f \sim \mathrm{GP}\bigl(0,\, k_{\ell_f,\eta_f}\bigr) \\
+k_{\ell_f,\eta_f} = \eta_f^2 \exp\Bigl(-\frac{(z-z')^2}{2\ell_f^2}\Bigr) \\
+f \sim \mathrm{GP}\bigl(0, k_{\ell_f,\eta_f}\bigr) \\
 % g^{(c)} \sim \mathrm{GP}\bigl(0,\, k_{\ell_g,\sigma_g}\bigr)
   % \qquad c\in\{m,m^2,m^4\} \\[0.5em]
 t_i = \frac{T_i - T_c}{T_c} \\
 z_i = t_i L_i^{1/\nu} \\
 % a_i = L_i^{-\omega} + \kappa\, |t_i|^{\omega\nu} \\
 % \pi_i = \frac{a_i}{1+a_i} \\[0.5em]
-\varepsilon_i \sim \mathcal{N}\bigl(0,\, \sigma_{\Phi_c,i}^2\bigr) \\
-\Phi_i = L^{-\beta/\nu} f(z_i) + \varepsilon^{(c)}_i
+\varepsilon_i \sim \mathcal{N}\bigl(0, \sigma_i^2\bigr) \\
+\Phi_i = L^{-\beta/\nu} f(z_i) + \varepsilon_i
 \end{aligned}
 $$
